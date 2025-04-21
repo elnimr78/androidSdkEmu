@@ -37,32 +37,22 @@ jobs:
 
       - name: Accept Android SDK licenses
         run: |
-          mkdir -p "$env:ANDROID_SDK_ROOT/licenses"
-          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$env:ANDROID_SDK_ROOT/licenses/android-sdk-license"
-          echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$env:ANDROID_SDK_ROOT/licenses/android-sdk-preview-license"
+          mkdir -p "$env:ANDROID_SDK_ROOT\licenses"
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$env:ANDROID_SDK_ROOT\licenses\android-sdk-license"
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$env:ANDROID_SDK_ROOT\licenses\android-sdk-preview-license"
         shell: pwsh
-        env:
-          ANDROID_SDK_ROOT: ${{ github.workspace }}\android-sdk      
 
-      - name: Accept licenses
-        run: |
-          mkdir "$env:ANDROID_HOME\licenses" -Force
-          echo "8933bad161af4178b1185d1a37fbf41ea5269c55" > "$env:ANDROID_HOME\licenses\android-sdk-license"
-          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> "$env:ANDROID_HOME\licenses\android-sdk-license"
-          echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$env:ANDROID_HOME\licenses\android-sdk-preview-license"
-        shell: pwsh
-        
       - name: Set up Java 11
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
           java-version: '11'
-          
+
       - name: Install required Android SDK components
         run: |
           $ErrorActionPreference = "Stop"
           & "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin\sdkmanager.bat" --sdk_root="$env:ANDROID_SDK_ROOT" "platform-tools" "emulator" "system-images;android-30;google_apis;x86_64"
-          & "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin\sdkmanager.bat" --licenses <# Accept licenses if required again #>
+          & "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin\sdkmanager.bat" --licenses
         shell: pwsh
 
       - name: List installed SDK components
@@ -72,18 +62,18 @@ jobs:
 
       - name: Create Emulator
         run: |
-          echo no | avdmanager create avd -n $env:EMULATOR_NAME -k "system-images;android-30;google_apis;x86_64" --force --device "pixel"
+          echo no | & "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin\avdmanager.bat" create avd -n $env:EMULATOR_NAME -k "system-images;android-30;google_apis;x86_64" --force --device "pixel"
         shell: pwsh
 
       - name: Start Emulator
         run: |
-          $env:EMULATOR_NAME = "${{ env.EMULATOR_NAME }}"
-          Start-Process -NoNewWindow -FilePath "$env:ANDROID_SDK_ROOT\emulator\emulator.exe" -ArgumentList "-avd $env:EMULATOR_NAME -memory 2048 -cores 2 -no-snapshot -no-audio -no-window" 
+          Start-Process -NoNewWindow -FilePath "$env:ANDROID_SDK_ROOT\emulator\emulator.exe" -ArgumentList "-avd", "$env:EMULATOR_NAME", "-memory", "2048", "-cores", "2", "-no-snapshot", "-no-audio", "-no-window"
           Start-Sleep -Seconds 60
         shell: pwsh
 
       - name: Wait for device
-        run: adb wait-for-device
+        run: |
+          adb wait-for-device
         shell: pwsh
 
       - name: Logcat Output
