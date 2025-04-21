@@ -64,53 +64,72 @@ jobs:
       - name: Create Emulator
         run: |
           echo no | & "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin\avdmanager.bat" create avd -n $env:EMULATOR_NAME -k "system-images;android-30;google_apis;x86_64" --force --device "pixel"
+          # Modify config.ini for better performance
+          $configPath = "$env:ANDROID_SDK_ROOT\avd\$env:EMULATOR_NAME.avd\config.ini"
+          (Get-Content $configPath) -replace "hw.gpu.mode=.*", "hw.gpu.mode=swiftshader_indirect" | Set-Content $configPath
+          (Get-Content $configPath) -replace "disk.dataPartition.size=.*", "disk.dataPartition.size=2G" | Set-Content $configPath
         shell: pwsh
 
-      - name: Start Emulator
+      - name: Start Emulator with detailed logging
         run: |
-          # Start emulator in background
-          $emulatorProcess = Start-Process -PassThru -FilePath "$env:ANDROID_SDK_ROOT\emulator\emulator.exe" -ArgumentList "-avd $env:EMULATOR_NAME -memory 2048 -cores 2 -no-snapshot -no-audio -gpu swiftshader_indirect -no-boot-anim -verbose"
-          
-          # Wait for device to be ready
+          # Start emulator with logging to file
+          $logFile = "$env:GITHUB_WORKSPACE\emulator.log"
+          Start-Process -NoNewWindow -FilePath "$env:ANDROID_SDK_ROOT\emulator\emulator.exe" `
+            -ArgumentList "-avd $env:EMULATOR_NAME -memory 2048 -cores 2 -no-snapshot -no-audio -gpu swiftshader_indirect -no-boot-anim -verbose -logcat *:v" `
+            -RedirectStandardOutput $logFile -RedirectStandardError $logFile -PassThru
+
+          # Wait for device with better checks
           $attempts = 0
-          $maxAttempts = 30
+          $maxAttempts = 60  # Increased to 10 minutes (60 attempts × 10 seconds)
           $isBooted = $false
           
           Write-Host "Waiting for emulator to boot..."
           
           while (($attempts -lt $maxAttempts) -and (-not $isBooted)) {
               try {
-                  $bootStatus = adb shell getprop sys.boot_completed 2>&1
-                  if ($bootStatus -eq "1") {
-                      $isBooted = $true
-                      Write-Host "Emulator booted successfully!"
-                      break
+                  $devices = adb devices
+                  if ($devices -match $env:EMULATOR_NAME) {
+                      $bootStatus = adb shell getprop sys.boot_completed 2>&1
+                      if ($bootStatus -eq "1") {
+                          $isBooted = $true
+                          Write-Host "Emulator booted successfully!"
+                          break
+                      }
                   }
               } catch {
-                  # Ignore errors while waiting
+                  Write-Host "Waiting for ADB connection..."
               }
               
               $attempts++
               Start-Sleep -Seconds 10
+              Write-Host "Boot attempt $attempts/$maxAttempts"
           }
           
           if (-not $isBooted) {
-              Write-Host "Emulator failed to boot within the allotted time"
-              $emulatorProcess | Stop-Process -Force
+              Write-Host "::error::Emulator failed to boot within the allotted time"
+              Write-Host "Last ADB devices output:"
+              adb devices
+              Write-Host "Emulator log tail:"
+              Get-Content "$env:GITHUB_WORKSPACE\emulator.log" -Tail 50
               exit 1
           }
-        shell: pwsh
-
-      - name: Check device status
-        run: |
-          adb devices
+          
+          # Additional checks after boot
+          Write-Host "Emulator status:"
           adb shell getprop
         shell: pwsh
+
+      - name: Upload emulator logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-logs
+          path: emulator.log
 
       - name: Logcat Output
         run: |
           adb logcat -d > logcat_output.txt
-          Get-Content logcat_output.txt
+          Get-Content logcat_output.txt -Head 100
         shell: pwsh
 
       - name: Upload Logcat Output
