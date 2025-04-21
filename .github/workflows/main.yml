@@ -67,7 +67,8 @@ jobs:
 
       - name: Start Emulator
         run: |
-          Start-Process -NoNewWindow -FilePath "$env:ANDROID_SDK_ROOT\emulator\emulator.exe" -ArgumentList "-avd", "$env:EMULATOR_NAME", "-memory", "2048", "-cores", "2", "-no-snapshot", "-no-audio", "-no-window"
+          $env:EMULATOR_NAME = "${{ env.EMULATOR_NAME }}"
+          Start-Process -NoNewWindow -FilePath "$env:ANDROID_SDK_ROOT\emulator\emulator.exe" -ArgumentList "-avd $env:EMULATOR_NAME -memory 2048 -cores 2 -no-snapshot -no-audio -no-window -gpu swiftshader_indirect"
           Start-Sleep -Seconds 60
         shell: pwsh
 
