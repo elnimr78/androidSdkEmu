@@ -35,6 +35,15 @@ jobs:
           echo "$env:ANDROID_SDK_ROOT\emulator" >> $env:GITHUB_PATH
         shell: pwsh
 
+      - name: Accept Android SDK licenses
+        run: |
+          mkdir -p "$env:ANDROID_SDK_ROOT/licenses"
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$env:ANDROID_SDK_ROOT/licenses/android-sdk-license"
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$env:ANDROID_SDK_ROOT/licenses/android-sdk-preview-license"
+        shell: pwsh
+        env:
+          ANDROID_SDK_ROOT: ${{ github.workspace }}\android-sdk      
+
       - name: Accept licenses
         run: |
           mkdir "$env:ANDROID_HOME\licenses" -Force
