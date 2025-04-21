@@ -1,0 +1,76 @@
+name: Android Emulator Logcat
+
+on:
+  workflow_dispatch:
+
+jobs:
+  emulator-logcat:
+    runs-on: windows-latest
+    env:
+      ANDROID_SDK_ROOT: ${{ github.workspace }}\android-sdk
+      ANDROID_HOME: ${{ github.workspace }}\android-sdk
+      EMULATOR_NAME: test-emulator
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up environment variables
+        run: |
+          echo "ANDROID_SDK_ROOT=${{ env.ANDROID_SDK_ROOT }}" >> $env:GITHUB_ENV
+          echo "ANDROID_HOME=${{ env.ANDROID_HOME }}" >> $env:GITHUB_ENV
+
+      - name: Download Android SDK Command Line Tools
+        run: |
+          Invoke-WebRequest https://dl.google.com/android/repository/commandlinetools-win-9477386_latest.zip -OutFile cmdline-tools.zip
+          Expand-Archive cmdline-tools.zip -DestinationPath $env:ANDROID_SDK_ROOT
+          mkdir "$env:ANDROID_SDK_ROOT\cmdline-tools\latest"
+          Move-Item "$env:ANDROID_SDK_ROOT\cmdline-tools\*" "$env:ANDROID_SDK_ROOT\cmdline-tools\latest"
+        shell: pwsh
+
+      - name: Add SDK tools to PATH
+        run: |
+          echo "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin" >> $env:GITHUB_PATH
+          echo "$env:ANDROID_SDK_ROOT\platform-tools" >> $env:GITHUB_PATH
+          echo "$env:ANDROID_SDK_ROOT\emulator" >> $env:GITHUB_PATH
+        shell: pwsh
+
+      - name: Accept licenses
+        run: |
+          mkdir "$env:ANDROID_HOME\licenses" -Force
+          echo "8933bad161af4178b1185d1a37fbf41ea5269c55" > "$env:ANDROID_HOME\licenses\android-sdk-license"
+          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> "$env:ANDROID_HOME\licenses\android-sdk-license"
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$env:ANDROID_HOME\licenses\android-sdk-preview-license"
+        shell: pwsh
+
+      - name: Install SDK packages
+        run: |
+          sdkmanager --sdk_root=$env:ANDROID_SDK_ROOT --install "platform-tools" "emulator" "system-images;android-30;google_apis;x86_64"
+        shell: pwsh
+
+      - name: Create Emulator
+        run: |
+          echo no | avdmanager create avd -n $env:EMULATOR_NAME -k "system-images;android-30;google_apis;x86_64" --force --device "pixel"
+        shell: pwsh
+
+      - name: Start Emulator
+        run: |
+          $env:EMULATOR_NAME = "${{ env.EMULATOR_NAME }}"
+          Start-Process -NoNewWindow -FilePath "$env:ANDROID_SDK_ROOT\emulator\emulator.exe" -ArgumentList "-avd $env:EMULATOR_NAME -memory 2048 -cores 2 -no-snapshot -no-audio -no-window" 
+          Start-Sleep -Seconds 60
+        shell: pwsh
+
+      - name: Wait for device
+        run: adb wait-for-device
+        shell: pwsh
+
+      - name: Logcat Output
+        run: |
+          adb logcat -d > logcat_output.txt
+        shell: pwsh
+
+      - name: Upload Logcat Output
+        uses: actions/upload-artifact@v3
+        with:
+          name: logcat-output
+          path: logcat_output.txt
