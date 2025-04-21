@@ -23,9 +23,9 @@ jobs:
       - name: Download Android SDK Command Line Tools
         run: |
           Invoke-WebRequest https://dl.google.com/android/repository/commandlinetools-win-9477386_latest.zip -OutFile cmdline-tools.zip
-          Expand-Archive cmdline-tools.zip -DestinationPath $env:ANDROID_SDK_ROOT
-          mkdir "$env:ANDROID_SDK_ROOT\cmdline-tools\latest"
-          Move-Item "$env:ANDROID_SDK_ROOT\cmdline-tools\*" "$env:ANDROID_SDK_ROOT\cmdline-tools\latest"
+          Expand-Archive cmdline-tools.zip -DestinationPath "$env:ANDROID_SDK_ROOT\temp"
+          mkdir "$env:ANDROID_SDK_ROOT\cmdline-tools\latest" -Force
+          Move-Item "$env:ANDROID_SDK_ROOT\temp\cmdline-tools\*" "$env:ANDROID_SDK_ROOT\cmdline-tools\latest"
         shell: pwsh
 
       - name: Add SDK tools to PATH
