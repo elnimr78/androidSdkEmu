@@ -51,6 +51,7 @@ jobs:
           
       - name: Install SDK packages
         run: |
+          sdkmanager --sdk_root=$env:ANDROID_SDK_ROOT --verbose --licenses
           sdkmanager --sdk_root=$env:ANDROID_SDK_ROOT --install "platform-tools" "emulator" "system-images;android-30;google_apis;x86_64"
         shell: pwsh
 
