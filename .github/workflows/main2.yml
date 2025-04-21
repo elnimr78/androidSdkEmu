@@ -1,0 +1,70 @@
+name: Android Emulator CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  android-emulator:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up environment variables
+        run: |
+          echo "ANDROID_SDK_ROOT=${{ github.workspace }}\\android-sdk" >> $env:GITHUB_ENV
+          echo "ANDROID_HOME=${{ github.workspace }}\\android-sdk" >> $env:GITHUB_ENV
+          echo "PATH=${{ github.workspace }}\\android-sdk\\platform-tools;${{ github.workspace }}\\android-sdk\\emulator;$env:PATH" >> $env:GITHUB_ENV
+
+      - name: Download command line tools
+        run: |
+          Invoke-WebRequest -Uri https://dl.google.com/android/repository/commandlinetools-win-10406996_latest.zip -OutFile cmdline-tools.zip
+          Expand-Archive cmdline-tools.zip -DestinationPath android-sdk
+          mkdir android-sdk\cmdline-tools\latest
+          Copy-Item -Path android-sdk\cmdline-tools\* -Destination android-sdk\cmdline-tools\latest -Recurse
+
+      - name: Install SDK components
+        run: |
+          android-sdk\cmdline-tools\latest\bin\sdkmanager.bat --sdk_root=${{ github.workspace }}\android-sdk ^
+            "platform-tools" "emulator" "platforms;android-30" "system-images;android-30;google_apis;x86_64"
+
+      - name: Accept licenses
+        run: yes | android-sdk\cmdline-tools\latest\bin\sdkmanager.bat --licenses
+
+      - name: Create AVD
+        run: |
+          echo no | android-sdk\cmdline-tools\latest\bin\avdmanager.bat create avd -n test-emulator -k "system-images;android-30;google_apis;x86_64" --force
+
+      - name: Start ADB server
+        run: |
+          android-sdk\platform-tools\adb start-server
+
+      - name: Launch emulator (headless, software GPU, no accel)
+        shell: bash
+        run: |
+          export ANDROID_EMULATOR_USE_SYSTEM_LIBS=1
+          export ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL=60
+          nohup emulator -avd test-emulator -no-audio -no-boot-anim -no-window -no-accel -gpu swiftshader_indirect -verbose > emulator.log 2>&1 &
+
+      - name: Wait for emulator to boot
+        run: |
+          echo "Waiting for emulator to boot..."
+          android-sdk\platform-tools\adb wait-for-device
+          android-sdk\platform-tools\adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done;'
+          echo "Emulator booted successfully 🎉"
+
+      - name: Run instrumentation tests (placeholder)
+        run: echo "You can run tests here with adb shell am instrument..."
+
+      - name: Logcat output (optional)
+        run: android-sdk\platform-tools\adb logcat -d > logcat.txt
+
+      - name: Upload logcat as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: logcat
+          path: logcat.txt
