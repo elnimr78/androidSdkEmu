@@ -63,11 +63,33 @@ jobs:
 
       - name: Create Emulator
         run: |
+          # Create the AVD
           echo no | & "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin\avdmanager.bat" create avd -n $env:EMULATOR_NAME -k "system-images;android-30;google_apis;x86_64" --force --device "pixel"
-          # Modify config.ini for better performance
+          
+          # Wait for AVD files to be created
           $configPath = "$env:ANDROID_SDK_ROOT\avd\$env:EMULATOR_NAME.avd\config.ini"
+          $attempts = 0
+          $maxAttempts = 10
+          
+          while (-not (Test-Path $configPath) -and ($attempts -lt $maxAttempts)) {
+              $attempts++
+              Start-Sleep -Seconds 2
+          }
+          
+          if (-not (Test-Path $configPath)) {
+              Write-Host "::error::AVD configuration file not found at $configPath"
+              exit 1
+          }
+          
+          # Modify config.ini for better performance
           (Get-Content $configPath) -replace "hw.gpu.mode=.*", "hw.gpu.mode=swiftshader_indirect" | Set-Content $configPath
           (Get-Content $configPath) -replace "disk.dataPartition.size=.*", "disk.dataPartition.size=2G" | Set-Content $configPath
+          
+          # Add additional recommended settings
+          Add-Content $configPath "`nhw.ramSize=2048"
+          Add-Content $configPath "`nvm.heapSize=256"
+          Add-Content $configPath "`nhw.keyboard=yes"
+          Add-Content $configPath "`nshowDeviceFrame=no"
         shell: pwsh
 
       - name: Start Emulator with detailed logging
