@@ -70,7 +70,7 @@ jobs:
         shell: pwsh
 
       - name: Upload Logcat Output
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: logcat-output
           path: logcat_output.txt
