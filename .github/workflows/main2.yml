@@ -1,70 +1,120 @@
-name: Android Emulator CI
+name: Android Emulator Logcat
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  android-emulator:
+  emulator-logcat:
     runs-on: windows-latest
+    env:
+      ANDROID_SDK_ROOT: ${{ github.workspace }}\android-sdk
+      ANDROID_HOME: ${{ github.workspace }}\android-sdk
+      EMULATOR_NAME: test-emulator
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v3
 
       - name: Set up environment variables
         run: |
-          echo "ANDROID_SDK_ROOT=${{ github.workspace }}\\android-sdk" >> $env:GITHUB_ENV
-          echo "ANDROID_HOME=${{ github.workspace }}\\android-sdk" >> $env:GITHUB_ENV
-          echo "PATH=${{ github.workspace }}\\android-sdk\\platform-tools;${{ github.workspace }}\\android-sdk\\emulator;$env:PATH" >> $env:GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=${{ env.ANDROID_SDK_ROOT }}" >> $env:GITHUB_ENV
+          echo "ANDROID_HOME=${{ env.ANDROID_HOME }}" >> $env:GITHUB_ENV
 
-      - name: Download command line tools
+      - name: Download Android SDK command line tools
         run: |
-          Invoke-WebRequest -Uri https://dl.google.com/android/repository/commandlinetools-win-10406996_latest.zip -OutFile cmdline-tools.zip
-          Expand-Archive cmdline-tools.zip -DestinationPath android-sdk
-          mkdir android-sdk\cmdline-tools\latest
-          Copy-Item -Path android-sdk\cmdline-tools\* -Destination android-sdk\cmdline-tools\latest -Recurse
+          Invoke-WebRequest https://dl.google.com/android/repository/commandlinetools-win-9477386_latest.zip -OutFile cmdline-tools.zip
+          Expand-Archive cmdline-tools.zip -DestinationPath "$env:ANDROID_SDK_ROOT\temp"
+          mkdir "$env:ANDROID_SDK_ROOT\cmdline-tools\latest" -Force
+          Move-Item "$env:ANDROID_SDK_ROOT\temp\cmdline-tools\*" "$env:ANDROID_SDK_ROOT\cmdline-tools\latest"
+          Remove-Item -Recurse -Force "$env:ANDROID_SDK_ROOT\temp"
+        shell: pwsh
 
-      - name: Install SDK components
+      - name: Add SDK tools to PATH
         run: |
-          android-sdk\cmdline-tools\latest\bin\sdkmanager.bat --sdk_root=${{ github.workspace }}\android-sdk ^
-            "platform-tools" "emulator" "platforms;android-30" "system-images;android-30;google_apis;x86_64"
+          echo "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin" >> $env:GITHUB_PATH
+          echo "$env:ANDROID_SDK_ROOT\platform-tools" >> $env:GITHUB_PATH
+          echo "$env:ANDROID_SDK_ROOT\emulator" >> $env:GITHUB_PATH
+        shell: pwsh
 
-      - name: Accept licenses
-        run: yes | android-sdk\cmdline-tools\latest\bin\sdkmanager.bat --licenses
-
-      - name: Create AVD
+      - name: Accept Android SDK licenses
         run: |
-          echo no | android-sdk\cmdline-tools\latest\bin\avdmanager.bat create avd -n test-emulator -k "system-images;android-30;google_apis;x86_64" --force
+          mkdir -p "$env:ANDROID_SDK_ROOT\licenses"
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$env:ANDROID_SDK_ROOT\licenses\android-sdk-license"
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$env:ANDROID_SDK_ROOT\licenses\android-sdk-preview-license"
+        shell: pwsh
 
-      - name: Start ADB server
+      - name: Set up Java 11
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Install required Android SDK components
         run: |
-          android-sdk\platform-tools\adb start-server
+          $ErrorActionPreference = "Stop"
+          & "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin\sdkmanager.bat" --sdk_root="$env:ANDROID_SDK_ROOT" "platform-tools" "emulator" "system-images;android-30;google_apis;x86_64"
+          & "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin\sdkmanager.bat" --licenses --sdk_root="$env:ANDROID_SDK_ROOT"
+        shell: pwsh
 
-      - name: Launch emulator (headless, software GPU, no accel)
-        shell: bash
+      - name: List installed SDK components
         run: |
-          export ANDROID_EMULATOR_USE_SYSTEM_LIBS=1
-          export ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL=60
-          nohup emulator -avd test-emulator -no-audio -no-boot-anim -no-window -no-accel -gpu swiftshader_indirect -verbose > emulator.log 2>&1 &
+          & "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin\sdkmanager.bat" --list_installed --sdk_root="$env:ANDROID_SDK_ROOT"
+        shell: pwsh
 
-      - name: Wait for emulator to boot
+      - name: Create Emulator
         run: |
-          echo "Waiting for emulator to boot..."
-          android-sdk\platform-tools\adb wait-for-device
-          android-sdk\platform-tools\adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done;'
-          echo "Emulator booted successfully 🎉"
+          echo no | & "$env:ANDROID_SDK_ROOT\cmdline-tools\latest\bin\avdmanager.bat" create avd -n $env:EMULATOR_NAME -k "system-images;android-30;google_apis;x86_64" --force --device "pixel"
+        shell: pwsh
 
-      - name: Run instrumentation tests (placeholder)
-        run: echo "You can run tests here with adb shell am instrument..."
+      - name: Start Emulator
+        run: |
+          # Start emulator in background
+          $emulatorProcess = Start-Process -PassThru -FilePath "$env:ANDROID_SDK_ROOT\emulator\emulator.exe" -ArgumentList "-avd $env:EMULATOR_NAME -memory 2048 -cores 2 -no-snapshot -no-audio -gpu swiftshader_indirect -no-boot-anim -verbose"
+          
+          # Wait for device to be ready
+          $attempts = 0
+          $maxAttempts = 30
+          $isBooted = $false
+          
+          Write-Host "Waiting for emulator to boot..."
+          
+          while (($attempts -lt $maxAttempts) -and (-not $isBooted)) {
+              try {
+                  $bootStatus = adb shell getprop sys.boot_completed 2>&1
+                  if ($bootStatus -eq "1") {
+                      $isBooted = $true
+                      Write-Host "Emulator booted successfully!"
+                      break
+                  }
+              } catch {
+                  # Ignore errors while waiting
+              }
+              
+              $attempts++
+              Start-Sleep -Seconds 10
+          }
+          
+          if (-not $isBooted) {
+              Write-Host "Emulator failed to boot within the allotted time"
+              $emulatorProcess | Stop-Process -Force
+              exit 1
+          }
+        shell: pwsh
 
-      - name: Logcat output (optional)
-        run: android-sdk\platform-tools\adb logcat -d > logcat.txt
+      - name: Check device status
+        run: |
+          adb devices
+          adb shell getprop
+        shell: pwsh
 
-      - name: Upload logcat as artifact
+      - name: Logcat Output
+        run: |
+          adb logcat -d > logcat_output.txt
+          Get-Content logcat_output.txt
+        shell: pwsh
+
+      - name: Upload Logcat Output
         uses: actions/upload-artifact@v4
         with:
-          name: logcat
-          path: logcat.txt
+          name: logcat-output
+          path: logcat_output.txt
