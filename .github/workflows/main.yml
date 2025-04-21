@@ -55,6 +55,11 @@ jobs:
           sdkmanager --sdk_root=$env:ANDROID_SDK_ROOT --install "platform-tools" "emulator" "system-images;android-30;google_apis;x86_64"
         shell: pwsh
 
+      - name: List installed SDK packages
+        run: |
+          sdkmanager --list_installed
+        shell: pwsh
+
       - name: Create Emulator
         run: |
           echo no | avdmanager create avd -n $env:EMULATOR_NAME -k "system-images;android-30;google_apis;x86_64" --force --device "pixel"
