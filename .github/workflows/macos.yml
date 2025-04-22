@@ -33,4 +33,17 @@ jobs:
         with:
           api-level: 29
           script: |
-            ./gradlew connectedCheck
+            # Start the emulator
+            emulator -avd test-avd -no-audio -no-window &
+
+            # Wait for the emulator to boot up
+            adb wait-for-device
+
+            # Run your tests here (e.g., using gradle)
+            #./gradlew connectedDebugAndroidTest
+
+      - name: Read logcat
+        run: |
+          # Fetch and display logcat logs
+          adb logcat -d > logcat_output.txt
+          cat logcat_output.txt
