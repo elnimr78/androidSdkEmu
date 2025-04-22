@@ -12,8 +12,10 @@ jobs:
       - name: Set environment variables
         run: |
           echo "ANDROID_SDK_ROOT=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_AVD_HOME=${{ runner.temp }}/android-avd" >> $GITHUB_ENV
           echo "JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home" >> $GITHUB_ENV
           echo "ADB_INSTALL_TIMEOUT=10" >> $GITHUB_ENV
+          mkdir -p "${{ runner.temp }}/android-avd"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -39,89 +41,84 @@ jobs:
         run: |
           yes | sdkmanager --licenses
           sdkmanager "platform-tools" "emulator" "system-images;android-33;google_apis_playstore;arm64-v8a"
+          # Verify installation
+          ls -la $ANDROID_SDK_ROOT/system-images/android-33/google_apis_playstore/arm64-v8a/
 
       - name: Create AVD
         run: |
-          echo "no" | avdmanager create avd -n testEmulator -k "system-images;android-33;google_apis_playstore;arm64-v8a" -d "pixel"
-          # Optimized config
-          echo "hw.gpu.enabled=yes" >> ~/.android/avd/testEmulator.avd/config.ini
-          echo "hw.gpu.mode=swiftshader_indirect" >> ~/.android/avd/testEmulator.avd/config.ini
-          echo "showDeviceFrame=no" >> ~/.android/avd/testEmulator.avd/config.ini
-          echo "hw.ramSize=2048" >> ~/.android/avd/testEmulator.avd/config.ini
-          echo "vm.heapSize=256" >> ~/.android/avd/testEmulator.avd/config.ini
-          echo "disk.dataPartition.size=2G" >> ~/.android/avd/testEmulator.avd/config.ini
+          echo "no" | avdmanager create avd -n testEmulator -k "system-images;android-33;google_apis_playstore;arm64-v8a" -d "pixel" -c 2048M
+          # Force config to avoid boot issues
+          echo "hw.gpu.enabled=yes" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
+          echo "hw.gpu.mode=swiftshader_indirect" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
+          echo "showDeviceFrame=no" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
+          echo "hw.ramSize=2048" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
+          echo "vm.heapSize=256" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
+          echo "disk.dataPartition.size=2G" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
+          # Verify AVD creation
+          avdmanager list avd
 
-      - name: Start Emulator in Background
+      - name: Start Emulator
         run: |
-          nohup $ANDROID_SDK_ROOT/emulator/emulator -avd testEmulator -no-audio -no-window -gpu swiftshader_indirect -verbose -no-snapshot -no-boot-anim -accel on > emulator.log 2>&1 &
+          $ANDROID_SDK_ROOT/emulator/emulator -avd testEmulator -no-audio -no-window -gpu swiftshader_indirect -verbose -no-snapshot -no-boot-anim -accel on > emulator.log 2>&1 &
           echo "Emulator started with PID $!"
-
-      - name: Check Emulator Process
-        run: ps -ef | grep emulator
+          sleep 10  # Initial delay before checking
 
       - name: Wait for Emulator to Boot
+        timeout-minutes: 10
         run: |
           echo "Waiting for emulator..."
           adb start-server
-          boot_completed=""
-          bootanim=""
           
-          for i in {1..60}; do
-            # Check basic connectivity first
-            adb shell exit 2>/dev/null || {
-              echo "ADB not ready yet... ($i/60)"
-              sleep 10
-              continue
-            }
-            
-            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            bootanim=$(adb shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r')
+          # Wait for device to appear
+          for i in {1..30}; do
+            if adb devices | grep -q emulator; then
+              break
+            fi
+            echo "Waiting for device to appear... ($i/30)"
+            sleep 10
+          done
+          
+          # Wait for boot completion
+          for i in {1..30}; do
+            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null || echo "")
+            bootanim=$(adb shell getprop init.svc.bootanim 2>/dev/null || echo "running")
             
             if [[ "$boot_completed" == "1" && "$bootanim" == "stopped" ]]; then
               echo "✅ Emulator fully booted!"
-              # Additional readiness check
-              adb shell input keyevent 82 && echo "Device unlocked"
-              break
+              adb shell input keyevent 82  # Wake up device
+              exit 0
             fi
             
-            echo "Booting... ($i/60) [boot_completed=$boot_completed, bootanim=$bootanim]"
+            echo "Booting... ($i/30) [boot_completed=$boot_completed, bootanim=$bootanim]"
             sleep 10
           done
+          
+          echo "❌ Emulator failed to boot"
+          exit 1
 
-          if [[ "$boot_completed" != "1" ]]; then
-            echo "❌ Emulator failed to boot"
-            exit 1
-          fi
-
-      - name: Get Debug Info
-        if: failure()
+      - name: Debug Info
+        if: always()
         run: |
-          echo "=== Emulator process status ==="
+          echo "=== Environment ==="
+          env | sort
+          echo "=== SDK Contents ==="
+          ls -la $ANDROID_SDK_ROOT
+          echo "=== AVD Contents ==="
+          ls -la $ANDROID_AVD_HOME
+          echo "=== Emulator Process ==="
           ps -ef | grep emulator
-          echo "=== ADB devices ==="
+          echo "=== ADB Devices ==="
           adb devices -l
-          echo "=== ADB properties ==="
-          adb shell getprop
-          echo "=== Last 100 logcat lines ==="
-          adb logcat -d | tail -100
-          echo "=== Emulator log excerpts ==="
+          echo "=== Logcat Excerpt ==="
+          adb logcat -d | tail -50
+          echo "=== Emulator Log ==="
           tail -50 emulator.log
 
-      - name: Start Logcat Capture
-        run: |
-          nohup adb logcat > logcat_output.txt 2>&1 &
-          echo "Capturing logcat for 30 minutes..."
-          sleep 1800
-
-      - name: Upload Logcat
-        uses: actions/upload-artifact@v4
-        with:
-          name: logcat-output
-          path: logcat_output.txt
-
-      - name: Upload Emulator Logs (Always)
+      - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: emulator-log
-          path: emulator.log
+          name: emulator-logs
+          path: |
+            emulator.log
+            logcat_output.txt
