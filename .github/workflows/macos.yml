@@ -47,7 +47,10 @@ jobs:
       - name: Start Android Emulator
         run: |
           nohup $ANDROID_SDK_ROOT/emulator/emulator -avd testEmulator -no-audio -no-window -no-snapshot -gpu swiftshader_indirect > emulator.log 2>&1 &
-
+      
+      - name: Debug Emulator Process
+        run: ps -ef | grep emulator
+  
       - name: Wait for ADB to connect
         run: |
           adb wait-for-device
@@ -58,7 +61,13 @@ jobs:
             sleep 5
           done
           echo "Emulator booted!"
-
+          
+      - name: Debug emulator status
+        run: |
+          adb devices
+          adb shell getprop | grep boot
+          adb shell pm list packages | head -n 10
+          
       - name: Start capturing logcat
         run: |
           nohup adb logcat > logcat_output.txt 2>&1 &
