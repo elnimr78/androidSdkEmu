@@ -51,23 +51,29 @@ jobs:
           echo "System images installed at:"
           ls -la $ANDROID_SDK_ROOT/system-images/android-33/google_apis_playstore/arm64-v8a/
 
-      - name: Create AVD with explicit SDK root
-        run: |
-          avdmanager --sdk_root=$ANDROID_SDK_ROOT create avd -n testEmulator -k "system-images;android-33;google_apis_playstore;arm64-v8a" -d "pixel" -c 2048M <<< "no"
-          
-          # Configure AVD
-          echo "hw.gpu.enabled=yes" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
-          echo "hw.gpu.mode=swiftshader_indirect" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
-          echo "showDeviceFrame=no" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
-          echo "hw.ramSize=2048" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
-          echo "vm.heapSize=256" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
-          echo "disk.dataPartition.size=2G" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
-          
-          # Add explicit SDK reference to AVD config
-          echo "image.sysdir.1=system-images/android-33/google_apis_playstore/arm64-v8a/" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
-          
-          # Verify AVD
-          avdmanager --sdk_root=$ANDROID_SDK_ROOT list avd
+            - name: Create AVD
+              run: |
+                # Create the AVD
+                avdmanager create avd \
+                  --sdk-root $ANDROID_SDK_ROOT \
+                  -n testEmulator \
+                  -k "system-images;android-33;google_apis_playstore;arm64-v8a" \
+                  -d "pixel" \
+                  -c 2048M <<< "no"
+                
+                # Configure AVD settings
+                cat <<EOF >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
+                hw.gpu.enabled=yes
+                hw.gpu.mode=swiftshader_indirect
+                showDeviceFrame=no
+                hw.ramSize=2048
+                vm.heapSize=256
+                disk.dataPartition.size=2G
+                image.sysdir.1=system-images/android-33/google_apis_playstore/arm64-v8a/
+                EOF
+                
+                # Verify AVD creation
+                avdmanager list avd
 
       - name: Start Emulator with explicit paths
         run: |
