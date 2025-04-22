@@ -19,139 +19,83 @@ jobs:
           echo "ANDROID_SDK_ROOT=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
           echo "ANDROID_HOME=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
           echo "ANDROID_AVD_HOME=${{ runner.temp }}/android-avd" >> $GITHUB_ENV
-          echo "JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home" >> $GITHUB_ENV
           mkdir -p "${{ runner.temp }}/android-avd"
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Install Android SDK Command Line Tools
+      - name: Install Android SDK
         run: |
           mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
           curl -fo commandlinetools.zip https://dl.google.com/android/repository/commandlinetools-mac-10406996_latest.zip
           unzip -q commandlinetools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools/latest"
           mv "$ANDROID_SDK_ROOT/cmdline-tools/latest/cmdline-tools/"* "$ANDROID_SDK_ROOT/cmdline-tools/latest/"
           rm commandlinetools.zip
-
-      - name: Add Android tools to PATH
-        run: |
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/emulator" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
 
-      - name: Install SDK Packages with explicit paths
+      - name: Install packages
         run: |
           yes | sdkmanager --licenses
-          sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "emulator" "system-images;android-33;google_apis_playstore;arm64-v8a"
-          
-          # Verify installation
-          echo "System images installed at:"
-          ls -la $ANDROID_SDK_ROOT/system-images/android-33/google_apis_playstore/arm64-v8a/
+          sdkmanager "platform-tools" "emulator" "system-images;android-33;google_apis_playstore;arm64-v8a"
+          echo "System images verification:"
+          ls -la "$ANDROID_SDK_ROOT/system-images/android-33/google_apis_playstore/arm64-v8a/"
 
-            - name: Create AVD
-              run: |
-                # Create the AVD
-                avdmanager create avd \
-                  --sdk-root $ANDROID_SDK_ROOT \
-                  -n testEmulator \
-                  -k "system-images;android-33;google_apis_playstore;arm64-v8a" \
-                  -d "pixel" \
-                  -c 2048M <<< "no"
-                
-                # Configure AVD settings
-                cat <<EOF >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
-                hw.gpu.enabled=yes
-                hw.gpu.mode=swiftshader_indirect
-                showDeviceFrame=no
-                hw.ramSize=2048
-                vm.heapSize=256
-                disk.dataPartition.size=2G
-                image.sysdir.1=system-images/android-33/google_apis_playstore/arm64-v8a/
-                EOF
-                
-                # Verify AVD creation
-                avdmanager list avd
-
-      - name: Start Emulator with explicit paths
+      - name: Create AVD
         run: |
-          echo "Starting emulator with SDK root: $ANDROID_SDK_ROOT"
+          avdmanager create avd \
+            --sdk-root "$ANDROID_SDK_ROOT" \
+            -n testEmulator \
+            -k "system-images;android-33;google_apis_playstore;arm64-v8a" \
+            -d pixel \
+            -c 2048M <<< "no"
+
+          # Configure AVD
+          cat <<EOF >> "$ANDROID_AVD_HOME/testEmulator.avd/config.ini"
+          hw.gpu.enabled=yes
+          hw.gpu.mode=swiftshader_indirect
+          showDeviceFrame=no
+          hw.ramSize=2048
+          vm.heapSize=256
+          disk.dataPartition.size=2G
+          image.sysdir.1=system-images/android-33/google_apis_playstore/arm64-v8a/
+          EOF
+
+      - name: Start Emulator
+        run: |
           $ANDROID_SDK_ROOT/emulator/emulator \
             -avd testEmulator \
             -no-audio \
             -no-window \
             -gpu swiftshader_indirect \
-            -verbose \
             -no-snapshot \
-            -no-boot-anim \
-            -accel on \
-            -sdk-root $ANDROID_SDK_ROOT > emulator.log 2>&1 &
-          EMULATOR_PID=$!
-          echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
-          echo "Emulator started with PID $EMULATOR_PID"
-          sleep 5
+            -sdk-root "$ANDROID_SDK_ROOT" > emulator.log 2>&1 &
+          echo "Emulator started with PID $!"
 
-      - name: Verify Emulator Process
-        run: |
-          echo "Current processes:"
-          ps -ef | grep emulator || true
-          
-          if ! ps -p $EMULATOR_PID > /dev/null; then
-            echo "❌ Emulator process $EMULATOR_PID is not running!"
-            echo "=== Emulator log ==="
-            cat emulator.log
-            exit 1
-          fi
-
-      - name: Wait for Emulator to Boot
+      - name: Wait for boot
         timeout-minutes: 10
         run: |
-          echo "Waiting for emulator..."
-          $ANDROID_SDK_ROOT/platform-tools/adb start-server
-          
-          # Wait for device
+          adb wait-for-device
           for i in {1..30}; do
-            if $ANDROID_SDK_ROOT/platform-tools/adb devices | grep -q emulator; then
-              echo "Device detected"
-              break
-            fi
-            echo "Waiting for device... ($i/30)"
-            sleep 5
-          done
-          
-          # Wait for boot completion
-          for i in {1..30}; do
-            boot_completed=$($ANDROID_SDK_ROOT/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null || echo "")
-            bootanim=$($ANDROID_SDK_ROOT/platform-tools/adb shell getprop init.svc.bootanim 2>/dev/null || echo "running")
-            
-            if [[ "$boot_completed" == "1" && "$bootanim" == "stopped" ]]; then
-              echo "✅ Emulator booted!"
-              $ANDROID_SDK_ROOT/platform-tools/adb shell input keyevent 82
+            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null)
+            if [ "$boot_completed" = "1" ]; then
+              echo "Emulator booted successfully"
+              adb shell input keyevent 82
               exit 0
             fi
-            echo "Booting... ($i/30) [boot_completed=$boot_completed, bootanim=$bootanim]"
-            sleep 5
+            echo "Waiting for boot... ($i/30)"
+            sleep 10
           done
-          
-          echo "❌ Emulator failed to boot"
-          echo "=== Last 50 lines of emulator.log ==="
-          tail -50 emulator.log
+          echo "Emulator failed to boot"
           exit 1
 
-      - name: Capture Logcat
-        if: success()
-        run: |
-          $ANDROID_SDK_ROOT/platform-tools/adb logcat > logcat_output.txt &
-          sleep 300
-          pkill -f "adb logcat" || true
-
-      - name: Upload Logs
+      - name: Capture logs
         if: always()
+        run: |
+          adb logcat -d > logcat.txt || true
+          tail -100 emulator.log > emulator-tail.log
+
+      - name: Upload logs
         uses: actions/upload-artifact@v4
         with:
           name: emulator-logs
           path: |
+            logcat.txt
             emulator.log
-            logcat_output.txt
+            emulator-tail.log
