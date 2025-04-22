@@ -1,62 +1,29 @@
-name: Android Emulator CI for Game
+name: Android ARM64 Emulator on macOS
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-
+  android-emulator:
+    runs-on: macos-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # List files to confirm gradlew exists
-      - name: List repository files
-        run: ls -al
-
-      # Make gradlew executable if necessary
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
-
-      - name: Install required packages for emulator
+      - name: Install Android SDK components
         run: |
-          sudo apt update
-          sudo apt install -y qemu-kvm libvirt-bin ubuntu-vm-builder bridge-utils
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "platforms;android-34" "system-images;android-34;default;arm64-v8a" "emulator"
 
-      - name: Set up Android SDK and Emulator
+      - name: Create AVD
         run: |
-          # Install the Android SDK tools
-          sudo apt install -y android-sdk
-          # Set environment variables for SDK
-          echo "export ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-          echo "export PATH=$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin" >> $GITHUB_ENV
+          echo "no" | avdmanager create avd -n Pixel_ARM -k "system-images;android-34;default;arm64-v8a" -d pixel
 
-      - name: Enable KVM
+      - name: Launch Emulator
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+          $ANDROID_HOME/emulator/emulator -avd Pixel_ARM -no-window -no-audio -no-snapshot &
+          adb wait-for-device
+          adb shell getprop ro.product.cpu.abi
 
-      - name: Run emulator and tests
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 29
-          script: |
-            # Start the emulator
-            emulator -avd test-avd -no-audio -no-window &
-
-            # Wait for the emulator to boot up
-            adb wait-for-device
-
-            # Run your tests here (e.g., using gradle)
-            ./gradlew connectedDebugAndroidTest
-
-      - name: Read logcat
+      - name: Run Your APK or Test Commands
         run: |
-          # Fetch and display logcat logs
-          adb logcat -d > logcat_output.txt
-          cat logcat_output.txt
+          adb install your-app.apk
+          adb shell am start -n com.yourcompany.yourgame/.MainActivity
+          adb logcat -d | tee logcat.txt
