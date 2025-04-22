@@ -32,55 +32,45 @@ jobs:
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
 
-      - name: Install packages (with verification)
+      - name: Install packages
         run: |
           yes | sdkmanager --licenses
           sdkmanager "platform-tools" "emulator" "system-images;android-33;google_apis_playstore;arm64-v8a"
-          
-          # Debug: Verify installation
-          echo "=== Installed Packages ==="
-          sdkmanager --list
-          echo "=== System Images ==="
-          ls -la "$ANDROID_SDK_ROOT/system-images/android-33/google_apis_playstore/arm64-v8a/"
 
-      - name: Create AVD (with debug output)
+      - name: Create AVD
         run: |
-          echo "=== Creating AVD ==="
           echo "no" | avdmanager create avd \
             -n testEmulator \
             -k "system-images;android-33;google_apis_playstore;arm64-v8a" \
             -d pixel \
             -c 2048M
 
-          # Critical configuration
           cat <<EOF >> "$ANDROID_AVD_HOME/testEmulator.avd/config.ini"
           hw.gpu.enabled=yes
           hw.gpu.mode=swiftshader_indirect
           hw.ramSize=2048
-          vm.heapSize=512  # Must match log output
+          vm.heapSize=512
           disk.dataPartition.size=2G
           image.sysdir.1=system-images/android-33/google_apis_playstore/arm64-v8a/
           EOF
 
-          # Debug: Verify AVD
-          echo "=== AVD Config ==="
-          cat "$ANDROID_AVD_HOME/testEmulator.avd/config.ini"
-
-      - name: Start Emulator (with HVF fix)
+      - name: Start Emulator (Fixed Command)
         run: |
           echo "=== Starting Emulator ==="
-          # Disable HVF acceleration explicitly
+          
+          # Fixed emulator command - removed problematic parameters
           $ANDROID_SDK_ROOT/emulator/emulator \
             -avd testEmulator \
             -no-audio \
             -no-window \
             -gpu swiftshader_indirect \
             -no-snapshot \
-            -no-accel \  # Critical fix for HVF error
+            -no-accel \
             -verbose > emulator.log 2>&1 &
+          
           EMULATOR_PID=$!
           echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
-
+          
           # Debug: Verify process
           sleep 5
           echo "=== Running Processes ==="
@@ -88,18 +78,14 @@ jobs:
           echo "=== Emulator Log Head ==="
           head -20 emulator.log
 
-      - name: Wait for boot (with robust checks)
+      - name: Wait for boot
         timeout-minutes: 10
         run: |
           echo "=== Waiting for Boot ==="
           adb start-server
           
-          # Phase 1: Wait for device connection
           for i in {1..60}; do
-            DEVICES=$(adb devices)
-            echo "$DEVICES"
-            
-            if echo "$DEVICES" | grep -q emulator; then
+            if adb devices | grep -q emulator; then
               echo "✅ Device detected"
               break
             fi
@@ -107,45 +93,25 @@ jobs:
             sleep 5
           done
           
-          # Phase 2: Wait for full boot
           for i in {1..60}; do
             boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null || echo "")
-            bootanim=$(adb shell getprop init.svc.bootanim 2>/dev/null || echo "running")
-            
-            if [[ "$boot_completed" == "1" && "$bootanim" == "stopped" ]]; then
+            if [[ "$boot_completed" == "1" ]]; then
               echo "✅ Fully booted!"
-              adb shell input keyevent 82  # Wake up
               exit 0
             fi
-            
-            # Debug: Additional checks
-            echo "Status ($i/60): boot_completed=$boot_completed, bootanim=$bootanim"
-            echo "=== ADB Devices ==="
-            adb devices -l
+            echo "Booting... ($i/60)"
             sleep 5
           done
           
-          # Debug: Failure investigation
           echo "❌ Boot failed!"
-          echo "=== Last 50 Log Lines ==="
           tail -50 emulator.log
-          echo "=== ADB Properties ==="
-          adb shell getprop || true
           exit 1
 
       - name: Capture Logs
         if: always()
         run: |
-          echo "=== Final Debug ==="
-          echo "--- Processes ---"
-          ps -ef | grep -E 'emulator|adb'
-          echo "--- Network ---"
-          netstat -an | grep 555 || true
-          echo "--- ADB Devices ---"
-          adb devices -l || true
-          echo "--- Logcat ---"
-          #adb logcat -d > logcat.txt || true
-          tail -200 emulator.log > emulator-tail.log
+          adb logcat -d > logcat.txt || true
+          tail -100 emulator.log > emulator-tail.log
 
       - name: Upload Logs
         if: always()
