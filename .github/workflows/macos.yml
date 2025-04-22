@@ -28,11 +28,13 @@ jobs:
         with:
           api-level: 30
           target: google_apis
-          arch: arm64-v8a
+          arch: x86_64                 # ✅ changed from arm64-v8a
           profile: Nexus 6
-          emulator-options: "-no-audio" # remove -no-window if you want full GUI
+          emulator-options: "-no-audio -no-window -gpu swiftshader_indirect"
           disable-animations: true
           script: |
+            adb wait-for-device
+            adb shell getprop sys.boot_completed | grep -m 1 '1'
             adb install path/to/your_game.apk
             adb shell am start -n com.your.game/.MainActivity
             adb logcat -d > logcat_output.txt
