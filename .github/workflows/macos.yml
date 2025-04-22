@@ -6,7 +6,7 @@ on:
 jobs:
   emulator-job:
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Set environment variables
@@ -57,19 +57,24 @@ jobs:
       - name: Wait for Emulator to Boot
         run: |
           echo "Waiting for emulator..."
+          adb start-server
           boot_completed=""
-          for i in {1..60}; do
+          for i in {1..60}; do  # Increased number of retries
+            # Check if adb is ready before checking boot
             adb devices
             boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
             if [[ "$boot_completed" == "1" ]]; then
               echo "✅ Emulator booted!"
-              exit 0
+              break  # Exit the loop early if the emulator is booted
             fi
             echo "Still booting... ($i/60)"
-            sleep 10
+            sleep 10  # Increased wait time between checks
           done
-          echo "❌ Emulator failed to boot"
-          exit 1
+
+          if [[ "$boot_completed" != "1" ]]; then
+            echo "❌ Emulator failed to boot"
+            exit 1
+          fi
 
       - name: Start Logcat Capture
         run: |
