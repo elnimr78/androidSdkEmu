@@ -7,23 +7,37 @@ jobs:
   android-emulator:
     runs-on: macos-latest
     steps:
+      - name: Set up Android SDK
+        run: |
+          mkdir -p "$HOME/android-sdk"
+          curl -o sdk-tools.zip https://dl.google.com/android/repository/commandlinetools-mac-10406996_latest.zip
+          unzip sdk-tools.zip -d "$HOME/android-sdk/cmdline-tools"
+          mv "$HOME/android-sdk/cmdline-tools/cmdline-tools" "$HOME/android-sdk/cmdline-tools/latest"
+
+      - name: Export Android SDK environment variables
+        run: |
+          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "PATH=$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools:$HOME/android-sdk/emulator:$PATH" >> $GITHUB_ENV
+
       - name: Install Android SDK components
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platform-tools" "platforms;android-34" "system-images;android-34;default;arm64-v8a" "emulator"
+          sdkmanager --sdk_root=$HOME/android-sdk --licenses <<< "y"
+          sdkmanager --sdk_root=$HOME/android-sdk \
+            "platform-tools" \
+            "emulator" \
+            "platforms;android-34" \
+            "system-images;android-34;default;arm64-v8a"
 
       - name: Create AVD
-        run: |
-          echo "no" | avdmanager create avd -n Pixel_ARM -k "system-images;android-34;default;arm64-v8a" -d pixel
+        run: echo "no" | avdmanager create avd -n Pixel_ARM -k "system-images;android-34;default;arm64-v8a" -d pixel
 
-      - name: Launch Emulator
+      - name: Launch AVD
         run: |
-          $ANDROID_HOME/emulator/emulator -avd Pixel_ARM -no-window -no-audio -no-snapshot &
+          $HOME/android-sdk/emulator/emulator -avd Pixel_ARM -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &
           adb wait-for-device
           adb shell getprop ro.product.cpu.abi
 
-      - name: Run Your APK or Test Commands
+      - name: Install & Launch APK (example)
         run: |
-          adb install your-app.apk
-          adb shell am start -n com.yourcompany.yourgame/.MainActivity
-          adb logcat -d | tee logcat.txt
+          adb install path/to/your-unity-arm64.apk
+          adb shell monkey -p com.yourcompany.yourgame -c android.intent.category.LAUNCHER 1
