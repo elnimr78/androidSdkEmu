@@ -139,7 +139,7 @@ jobs:
           adb devices -l
           adb shell getprop || true
           echo "--- Logs ---"
-          adb logcat -d > logcat.txt || true
+          #adb logcat -d > logcat.txt || true
           tail -200 emulator.log > emulator-tail.log
 
       - name: Upload Logs
