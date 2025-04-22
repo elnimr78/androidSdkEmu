@@ -2,7 +2,9 @@ name: Android Emulator CI (Ubuntu 24.04)
 
 on:
   workflow_dispatch:
-
+  pull_request:
+  push:
+    branches: [ main ]
 
 jobs:
   android-emulator:
@@ -90,8 +92,25 @@ jobs:
             --device "$PROFILE" \
             --force
 
-          # Configure AVD
+          # Wait for AVD files to be created
           CONFIG_FILE="$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.avd/config.ini"
+          attempts=0
+          max_attempts=10
+          
+          while [ ! -f "$CONFIG_FILE" ] && [ $attempts -lt $max_attempts ]; do
+            attempts=$((attempts+1))
+            sleep 2
+            echo "Waiting for AVD configuration... ($attempts/$max_attempts)"
+          done
+          
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "::error::AVD configuration file not found at $CONFIG_FILE"
+            echo "Contents of AVD directory:"
+            ls -la "$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.avd/" || true
+            exit 1
+          fi
+          
+          # Configure AVD
           echo "hw.gpu.mode=auto" >> "$CONFIG_FILE"
           echo "hw.gpu.enabled=yes" >> "$CONFIG_FILE"
           echo "hw.keyboard=yes" >> "$CONFIG_FILE"
@@ -101,6 +120,7 @@ jobs:
 
       - name: Start emulator in background
         run: |
+          # Start emulator with verbose logging
           nohup $ANDROID_SDK_ROOT/emulator/emulator \
             -avd $EMULATOR_NAME \
             -no-window \
@@ -133,6 +153,8 @@ jobs:
           
           if [ "$boot_completed" = false ]; then
             echo "::error::Emulator failed to boot"
+            echo "Emulator log tail:"
+            tail -n 50 emulator.log
             echo "Last logcat:"
             adb logcat -d | tail -n 50
             exit 1
@@ -145,6 +167,7 @@ jobs:
       - name: Run tests
         run: |
           # Your test commands here
+          echo "Running tests..."
           adb devices
           adb shell getprop
           adb logcat -d > logcat.txt
@@ -165,3 +188,4 @@ jobs:
             kill $EMULATOR_PID || true
           fi
           adb emu kill || true
+          echo "Emulator stopped"
