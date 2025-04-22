@@ -9,6 +9,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # Initial setup steps remain the same...
       - name: Cleanup previous runs
         run: |
           pkill -f "emulator" || true
@@ -30,25 +31,29 @@ jobs:
           rm commandlinetools.zip
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      - name: Install packages
+      - name: Install packages (with verification)
         run: |
           yes | sdkmanager --licenses
           sdkmanager "platform-tools" "emulator" "system-images;android-33;google_apis_playstore;arm64-v8a"
-          echo "System images verification:"
-          ls -la "$ANDROID_SDK_ROOT/system-images/android-33/google_apis_playstore/arm64-v8a/"
-
-      - name: Create AVD
-        run: |
-          # Export environment variables
-          export ANDROID_SDK_ROOT="${{ runner.temp }}/android-sdk"
-          export ANDROID_AVD_HOME="${{ runner.temp }}/android-avd"
           
-          # Create AVD
+          # DEBUG: Verify system images
+          echo "=== System Images Verification ==="
+          ls -la "$ANDROID_SDK_ROOT/system-images/android-33/google_apis_playstore/arm64-v8a/"
+          echo "=== Installed Packages ==="
+          sdkmanager --list
+
+      - name: Create AVD (with debug output)
+        run: |
+          echo "=== Creating AVD ==="
           echo "no" | avdmanager create avd \
             -n testEmulator \
             -k "system-images;android-33;google_apis_playstore;arm64-v8a" \
             -d pixel \
             -c 2048M
+
+          # DEBUG: Verify AVD files
+          echo "=== AVD Directory Contents ==="
+          ls -la "$ANDROID_AVD_HOME/testEmulator.avd/"
 
           # Configure AVD
           cat <<EOF >> "$ANDROID_AVD_HOME/testEmulator.avd/config.ini"
@@ -61,44 +66,88 @@ jobs:
           disk.dataPartition.size=2G
           EOF
 
-          # Verify AVD creation
-          avdmanager list avd
+          # DEBUG: Verify config
+          echo "=== Final AVD Config ==="
+          cat "$ANDROID_AVD_HOME/testEmulator.avd/config.ini"
 
-      - name: Start Emulator
+      - name: Start Emulator (with process tracking)
         run: |
+          echo "=== Starting Emulator ==="
           $ANDROID_SDK_ROOT/emulator/emulator \
             -avd testEmulator \
             -no-audio \
             -no-window \
             -gpu swiftshader_indirect \
             -no-snapshot \
-            -sdk-root "$ANDROID_SDK_ROOT" > emulator.log 2>&1 &
-          echo "Emulator started with PID $!"
+            -verbose > emulator.log 2>&1 &
+          EMULATOR_PID=$!
+          echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
+          
+          # DEBUG: Verify process
+          echo "=== Running Processes ==="
+          ps -ef | grep emulator || true
+          echo "=== Emulator Log Head ==="
+          head -20 emulator.log
 
-      - name: Wait for boot
+      - name: Wait for boot (with robust checks)
         timeout-minutes: 10
         run: |
-          adb wait-for-device
+          echo "=== Waiting for Boot ==="
+          adb start-server
+          
+          # Phase 1: Wait for device connection
           for i in {1..30}; do
-            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null)
-            if [ "$boot_completed" = "1" ]; then
-              echo "Emulator booted successfully"
+            if adb devices | grep -q emulator; then
+              echo "✅ Device detected"
+              break
+            fi
+            echo "Waiting for device ($i/30)..."
+            sleep 5
+          done
+          
+          # Phase 2: Wait for full boot
+          for i in {1..30}; do
+            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null || echo "")
+            bootanim=$(adb shell getprop init.svc.bootanim 2>/dev/null || echo "running")
+            
+            if [[ "$boot_completed" == "1" && "$bootanim" == "stopped" ]]; then
+              echo "✅ Fully booted!"
               adb shell input keyevent 82
               exit 0
             fi
-            echo "Waiting for boot... ($i/30)"
-            sleep 10
+            
+            # DEBUG: Additional checks
+            echo "Status ($i/30): boot_completed=$boot_completed, bootanim=$bootanim"
+            echo "=== ADB Devices ==="
+            adb devices -l
+            sleep 5
           done
-          echo "Emulator failed to boot"
+          
+          # DEBUG: Failure investigation
+          echo "❌ Boot failed!"
+          echo "=== Last 50 Log Lines ==="
+          tail -50 emulator.log
+          echo "=== ADB Properties ==="
+          adb shell getprop || true
           exit 1
 
-      - name: Capture logs
+      - name: Capture Logs
         if: always()
         run: |
+          echo "=== Final Debug Info ==="
+          echo "--- Processes ---"
+          ps -ef | grep -E 'emulator|adb' || true
+          echo "--- ADB Devices ---"
+          adb devices -l || true
+          echo "--- System Properties ---"
+          adb shell getprop || true
+          
+          # Save logs
           adb logcat -d > logcat.txt || true
           tail -100 emulator.log > emulator-tail.log
 
-      - name: Upload logs
+      - name: Upload Logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: emulator-logs
