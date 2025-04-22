@@ -144,7 +144,7 @@ jobs:
           echo "--- ADB Devices ---"
           adb devices -l || true
           echo "--- Logcat ---"
-          adb logcat -d > logcat.txt || true
+          #adb logcat -d > logcat.txt || true
           tail -200 emulator.log > emulator-tail.log
 
       - name: Upload Logs
