@@ -6,7 +6,7 @@ on:
 jobs:
   emulator-job:
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     steps:
       - name: Set environment variables
@@ -30,22 +30,19 @@ jobs:
           mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/$version"
           rm commandlinetools.zip
 
-      - name: Add Android tools to PATH
+      - name: Set up Android SDK environment variables
         run: |
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/emulator" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/$version/bin" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/emulator" >> $GITHUB_PATH
+
+      - name: Accept SDK licenses
+        run: |
+          yes | sdkmanager --licenses
 
       - name: Install SDK Packages
         run: |
-          yes | sdkmanager --licenses
           sdkmanager "platform-tools" "emulator" "system-images;android-34;google_apis_playstore;arm64-v8a"
-
-      - name: Check SDK installation
-        run: |
-          # Check if system images and emulator are installed
-          ls -alh $ANDROID_SDK_ROOT/system-images/android-34/google_apis_playstore/arm64-v8a/
-          ls -alh $ANDROID_SDK_ROOT/emulator/
 
       - name: Create AVD
         run: |
@@ -55,10 +52,14 @@ jobs:
           echo "hw.gpu.mode=swiftshader_indirect" >> ~/.android/avd/testEmulator.avd/config.ini
           echo "showDeviceFrame=no" >> ~/.android/avd/testEmulator.avd/config.ini
 
-      - name: Check AVD Path
+      - name: Verify SDK Tools
         run: |
-          # Check AVD configuration and path
-          ls -alh ~/.android/avd/
+          echo "Checking if sdkmanager is available"
+          which sdkmanager
+          sdkmanager --version
+          echo "Checking if emulator is available"
+          which emulator
+          emulator -version
 
       - name: Start Emulator in Background
         run: |
@@ -70,24 +71,19 @@ jobs:
       - name: Wait for Emulator to Boot
         run: |
           echo "Waiting for emulator..."
-          adb start-server
           boot_completed=""
           for i in {1..60}; do
-            # Check if adb is ready before checking boot
             adb devices
             boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
             if [[ "$boot_completed" == "1" ]]; then
               echo "✅ Emulator booted!"
-              break  # Exit the loop early if the emulator is booted
+              exit 0
             fi
             echo "Still booting... ($i/60)"
-            sleep 10  # Increased wait time between checks
+            sleep 10
           done
-
-          if [[ "$boot_completed" != "1" ]]; then
-            echo "❌ Emulator failed to boot"
-            exit 1
-          fi
+          echo "❌ Emulator failed to boot"
+          exit 1
 
       - name: Start Logcat Capture
         run: |
