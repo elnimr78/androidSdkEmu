@@ -1,113 +1,167 @@
-name: Android Emulator Logcat (Linux)
+name: Android Emulator CI (Ubuntu 24.04)
 
 on:
   workflow_dispatch:
 
+
 jobs:
-  emulator-logcat:
+  android-emulator:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
       ANDROID_HOME: ${{ github.workspace }}/android-sdk
       EMULATOR_NAME: test-emulator
+      API_LEVEL: 34
+      ARCH: x86_64
+      PROFILE: pixel_7_pro
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up environment variables
         run: |
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
 
-      - name: Install required system packages
+      - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libpulse0 libgl1-mesa-glx openjdk-11-jdk qemu-kvm
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            libpulse0 \
+            libglx-mesa0 \
+            libegl-mesa0 \
+            libgl1 \
+            openjdk-17-jdk \
+            qemu-kvm \
+            libnss3 \
+            libxcomposite1 \
+            libxcursor1 \
+            libxi6 \
+            libxtst6 \
+            ca-certificates \
+            curl \
+            unzip \
+            git
 
-      - name: Download Android SDK command line tools
+      - name: Check KVM availability
+        run: |
+          if [ ! -c /dev/kvm ]; then
+            echo "::warning::KVM not available, emulator will run slower"
+          else
+            sudo chmod a+rw /dev/kvm
+          fi
+
+      - name: Download Android Command Line Tools
         run: |
           mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/latest
-          wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
-          unzip cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools/latest
+          curl -s https://dl.google.com/android/repository/commandlinetools-linux-10406996_latest.zip -o cmdline-tools.zip
+          unzip -qq cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools/latest
           mv $ANDROID_SDK_ROOT/cmdline-tools/latest/cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/latest/
           rm -r $ANDROID_SDK_ROOT/cmdline-tools/latest/cmdline-tools cmdline-tools.zip
 
-      - name: Add SDK tools to PATH
+      - name: Add Android tools to PATH
         run: |
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/emulator" >> $GITHUB_PATH
 
-      - name: Accept Android SDK licenses
+      - name: Accept licenses
         run: |
           mkdir -p "$ANDROID_SDK_ROOT/licenses"
           echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_SDK_ROOT/licenses/android-sdk-license"
           echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_SDK_ROOT/licenses/android-sdk-preview-license"
+          yes | sdkmanager --licenses --sdk_root=$ANDROID_SDK_ROOT || true
 
-      - name: Install required Android SDK components
+      - name: Install Android SDK components
         run: |
-          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "emulator" "system-images;android-30;google_apis;x86_64"
+          sdkmanager --sdk_root=$ANDROID_SDK_ROOT --install \
+            "platform-tools" \
+            "emulator" \
+            "platforms;android-$API_LEVEL" \
+            "system-images;android-$API_LEVEL;google_apis;$ARCH"
 
-      - name: List installed SDK components
+      - name: Create Android Virtual Device
         run: |
-          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --list_installed --sdk_root=$ANDROID_SDK_ROOT
+          echo no | avdmanager create avd \
+            --name $EMULATOR_NAME \
+            --package "system-images;android-$API_LEVEL;google_apis;$ARCH" \
+            --device "$PROFILE" \
+            --force
 
-      - name: Create Emulator
+          # Configure AVD
+          CONFIG_FILE="$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.avd/config.ini"
+          echo "hw.gpu.mode=auto" >> "$CONFIG_FILE"
+          echo "hw.gpu.enabled=yes" >> "$CONFIG_FILE"
+          echo "hw.keyboard=yes" >> "$CONFIG_FILE"
+          echo "hw.ramSize=2048" >> "$CONFIG_FILE"
+          echo "vm.heapSize=512" >> "$CONFIG_FILE"
+          echo "disk.dataPartition.size=4G" >> "$CONFIG_FILE"
+
+      - name: Start emulator in background
         run: |
-          echo no | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager create avd -n $EMULATOR_NAME -k "system-images;android-30;google_apis;x86_64" --force --device "pixel"
+          nohup $ANDROID_SDK_ROOT/emulator/emulator \
+            -avd $EMULATOR_NAME \
+            -no-window \
+            -no-boot-anim \
+            -no-audio \
+            -gpu auto \
+            -memory 2048 \
+            -cores 2 \
+            -accel on \
+            -logcat *:V > emulator.log 2>&1 &
+          EMULATOR_PID=$!
+          echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
+
+      - name: Wait for emulator to boot
+        timeout-minutes: 10
+        run: |
+          # Wait for device to appear in adb
+          adb wait-for-device
           
-          # Wait for AVD files to be created
-          configPath="$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.avd/config.ini"
-          attempts=0
-          maxAttempts=10
-          
-          while [ ! -f "$configPath" ] && [ $attempts -lt $maxAttempts ]; do
-              attempts=$((attempts+1))
-              sleep 2
+          # Wait for boot completion
+          boot_completed=false
+          for i in {1..60}; do
+            if adb shell getprop sys.boot_completed | grep -q "1"; then
+              boot_completed=true
+              break
+            fi
+            sleep 5
+            echo "Waiting for emulator to boot... ($i/60)"
           done
           
-          if [ ! -f "$configPath" ]; then
-              echo "::error::AVD configuration file not found at $configPath"
-              exit 1
+          if [ "$boot_completed" = false ]; then
+            echo "::error::Emulator failed to boot"
+            echo "Last logcat:"
+            adb logcat -d | tail -n 50
+            exit 1
           fi
           
-          # Modify config.ini for better performance
-          sed -i 's/hw.gpu.mode=.*/hw.gpu.mode=swiftshader_indirect/' "$configPath"
-          sed -i 's/disk.dataPartition.size=.*/disk.dataPartition.size=2G/' "$configPath"
-          
-          # Add additional recommended settings
-          echo -e "\nhw.ramSize=2048" >> "$configPath"
-          echo -e "\nvm.heapSize=256" >> "$configPath"
-          echo -e "\nhw.keyboard=yes" >> "$configPath"
-          echo -e "\nshowDeviceFrame=no" >> "$configPath"
+          # Unlock the device
+          adb shell input keyevent 82
+          echo "Emulator booted successfully"
 
-      - name: Start Emulator with detailed logging
+      - name: Run tests
         run: |
-          # Start emulator in background with logging
-          nohup $ANDROID_SDK_ROOT/emulator/emulator -avd $EMULATOR_NAME -memory 2048 -cores 2 -no-snapshot -no-audio -gpu swiftshader_indirect -no-boot-anim -verbose -logcat *:v > emulator.log 2>&1 &
-          emulator_pid=$!
-          
-          # Wait for device
-          attempts=0
-          maxAttempts=60
-          isBooted=false
-          
-          echo "Waiting for emulator to boot..."
-          
-          while [ $attempts -lt $maxAttempts ] && [ "$isBooted" = false ]; do
-              if adb devices | grep -q $EMULATOR_NAME; then
-                  bootStatus=$(adb shell getprop sys.boot_completed 2>&1)
-                  if [ "$bootStatus" = "1" ]; then
-                      isBooted=true
-                      echo "Emulator booted successfully!"
-                      break
-                  fi
-              fi
-              
-              attempts=$((attempts+1))
-              sleep 10
-              echo "Boot attempt $attempts/$maxAttempts"
-          done
-          
-          if [ "$isBooted" = false ];
+          # Your test commands here
+          adb devices
+          adb shell getprop
+          adb logcat -d > logcat.txt
+
+      - name: Upload emulator logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-logs
+          path: |
+            emulator.log
+            logcat.txt
+
+      - name: Stop emulator
+        if: always()
+        run: |
+          if [ -n "$EMULATOR_PID" ]; then
+            kill $EMULATOR_PID || true
+          fi
+          adb emu kill || true
