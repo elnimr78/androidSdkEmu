@@ -42,10 +42,13 @@ jobs:
       - name: Create AVD
         run: |
           echo "no" | avdmanager create avd -n testEmulator -k "system-images;android-34;google_apis_playstore;arm64-v8a" -d "pixel"
-          # Force config to avoid boot issues
+          # Optimized config
           echo "hw.gpu.enabled=yes" >> ~/.android/avd/testEmulator.avd/config.ini
           echo "hw.gpu.mode=swiftshader_indirect" >> ~/.android/avd/testEmulator.avd/config.ini
           echo "showDeviceFrame=no" >> ~/.android/avd/testEmulator.avd/config.ini
+          echo "hw.ramSize=2048" >> ~/.android/avd/testEmulator.avd/config.ini
+          echo "vm.heapSize=256" >> ~/.android/avd/testEmulator.avd/config.ini
+          echo "disk.dataPartition.size=2G" >> ~/.android/avd/testEmulator.avd/config.ini
 
       - name: Start Emulator in Background
         run: |
@@ -59,20 +62,41 @@ jobs:
           echo "Waiting for emulator..."
           adb start-server
           boot_completed=""
-          for i in {1..60}; do  # Increased number of retries
-            # Check if adb is ready before checking boot
-            adb devices
-            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            if [[ "$boot_completed" == "1" ]]; then
-              echo "✅ Emulator booted!"
-              break  # Exit the loop early if the emulator is booted
+          for i in {1..120}; do  # Increased to 120 retries (20 minutes)
+            # Check if device is detected
+            devices=$(adb devices | wc -l)
+            if [ "$devices" -lt 3 ]; then
+              echo "No device detected yet..."
+              sleep 10
+              continue
             fi
-            echo "Still booting... ($i/60)"
-            sleep 10  # Increased wait time between checks
+            
+            # Check basic connectivity
+            adb shell exit 2>/dev/null || {
+              echo "ADB shell not ready..."
+              sleep 10
+              continue
+            }
+            
+            # Check boot properties
+            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            boot_anim=$(adb shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r')
+            
+            if [[ "$boot_completed" == "1" && "$boot_anim" == "stopped" ]]; then
+              echo "✅ Emulator fully booted!"
+              break
+            fi
+            
+            echo "Still booting... ($i/120) - boot_completed=$boot_completed, boot_anim=$boot_anim"
+            sleep 10
           done
-
+      
           if [[ "$boot_completed" != "1" ]]; then
             echo "❌ Emulator failed to boot"
+            # Get more debug info before failing
+            adb devices
+            adb shell getprop
+            adb logcat -d | head -100
             exit 1
           fi
 
@@ -81,7 +105,19 @@ jobs:
           nohup adb logcat > logcat_output.txt 2>&1 &
           echo "Capturing logcat for 30 minutes..."
           sleep 1800
-
+      
+      - name: Get Debug Info
+        if: failure()
+        run: |
+          echo "=== Emulator process status ==="
+          ps -ef | grep emulator
+          echo "=== ADB devices ==="
+          adb devices
+          echo "=== ADB properties ==="
+          adb shell getprop
+          echo "=== Last 100 logcat lines ==="
+          adb logcat -d | tail -100
+          
       - name: Upload Logcat
         uses: actions/upload-artifact@v4
         with:
@@ -94,3 +130,5 @@ jobs:
         with:
           name: emulator-log
           path: emulator.log
+
+      
