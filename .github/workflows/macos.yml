@@ -22,6 +22,19 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
+      - name: Install required packages for emulator
+        run: |
+          sudo apt update
+          sudo apt install -y qemu-kvm libvirt-bin ubuntu-vm-builder bridge-utils
+
+      - name: Set up Android SDK and Emulator
+        run: |
+          # Install the Android SDK tools
+          sudo apt install -y android-sdk
+          # Set environment variables for SDK
+          echo "export ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "export PATH=$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin" >> $GITHUB_ENV
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -40,7 +53,7 @@ jobs:
             adb wait-for-device
 
             # Run your tests here (e.g., using gradle)
-            #./gradlew connectedDebugAndroidTest
+            ./gradlew connectedDebugAndroidTest
 
       - name: Read logcat
         run: |
