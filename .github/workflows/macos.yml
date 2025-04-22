@@ -110,7 +110,7 @@ jobs:
       - name: Capture Logs
         if: always()
         run: |
-          adb logcat -d > logcat.txt || true
+          #adb logcat -d > logcat.txt || true
           tail -100 emulator.log > emulator-tail.log
 
       - name: Upload Logs
