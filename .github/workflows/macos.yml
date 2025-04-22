@@ -6,13 +6,14 @@ on:
 jobs:
   emulator-job:
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Set environment variables
         run: |
           echo "ANDROID_SDK_ROOT=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
           echo "JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home" >> $GITHUB_ENV
+          echo "ADB_INSTALL_TIMEOUT=10" >> $GITHUB_ENV
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -25,45 +26,35 @@ jobs:
           mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
           curl -fo commandlinetools.zip https://dl.google.com/android/repository/commandlinetools-mac-10406996_latest.zip
           unzip -q commandlinetools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
-          # Extract version from source.properties and rename folder accordingly
-          version=$(grep "Pkg.Revision" $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/source.properties | cut -d'=' -f2 | tr -d '[:space:]')
-          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/$version"
+          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
           rm commandlinetools.zip
 
-      - name: Set up Android SDK environment variables
+      - name: Add Android tools to PATH
         run: |
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/$version/bin" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/emulator" >> $GITHUB_PATH
-
-      - name: Accept SDK licenses
-        run: |
-          yes | sdkmanager --licenses
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
 
       - name: Install SDK Packages
         run: |
-          sdkmanager "platform-tools" "emulator" "system-images;android-34;google_apis_playstore;arm64-v8a"
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "emulator" "system-images;android-33;google_apis_playstore;arm64-v8a"
 
       - name: Create AVD
         run: |
-          echo "no" | avdmanager create avd -n testEmulator -k "system-images;android-34;google_apis_playstore;arm64-v8a" -d "pixel"
-          # Force config to avoid boot issues
+          echo "no" | avdmanager create avd -n testEmulator -k "system-images;android-33;google_apis_playstore;arm64-v8a" -d "pixel"
+          # Optimized config
           echo "hw.gpu.enabled=yes" >> ~/.android/avd/testEmulator.avd/config.ini
           echo "hw.gpu.mode=swiftshader_indirect" >> ~/.android/avd/testEmulator.avd/config.ini
           echo "showDeviceFrame=no" >> ~/.android/avd/testEmulator.avd/config.ini
-
-      - name: Verify SDK Tools
-        run: |
-          echo "Checking if sdkmanager is available"
-          which sdkmanager
-          sdkmanager --version
-          echo "Checking if emulator is available"
-          which emulator
-          emulator -version
+          echo "hw.ramSize=2048" >> ~/.android/avd/testEmulator.avd/config.ini
+          echo "vm.heapSize=256" >> ~/.android/avd/testEmulator.avd/config.ini
+          echo "disk.dataPartition.size=2G" >> ~/.android/avd/testEmulator.avd/config.ini
 
       - name: Start Emulator in Background
         run: |
-          nohup $ANDROID_SDK_ROOT/emulator/emulator -avd testEmulator -no-audio -no-window -gpu swiftshader_indirect -verbose > emulator.log 2>&1 &
+          nohup $ANDROID_SDK_ROOT/emulator/emulator -avd testEmulator -no-audio -no-window -gpu swiftshader_indirect -verbose -no-snapshot -no-boot-anim -accel on > emulator.log 2>&1 &
+          echo "Emulator started with PID $!"
 
       - name: Check Emulator Process
         run: ps -ef | grep emulator
@@ -71,19 +62,50 @@ jobs:
       - name: Wait for Emulator to Boot
         run: |
           echo "Waiting for emulator..."
+          adb start-server
           boot_completed=""
+          bootanim=""
+          
           for i in {1..60}; do
-            adb devices
+            # Check basic connectivity first
+            adb shell exit 2>/dev/null || {
+              echo "ADB not ready yet... ($i/60)"
+              sleep 10
+              continue
+            }
+            
             boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            if [[ "$boot_completed" == "1" ]]; then
-              echo "✅ Emulator booted!"
-              exit 0
+            bootanim=$(adb shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r')
+            
+            if [[ "$boot_completed" == "1" && "$bootanim" == "stopped" ]]; then
+              echo "✅ Emulator fully booted!"
+              # Additional readiness check
+              adb shell input keyevent 82 && echo "Device unlocked"
+              break
             fi
-            echo "Still booting... ($i/60)"
+            
+            echo "Booting... ($i/60) [boot_completed=$boot_completed, bootanim=$bootanim]"
             sleep 10
           done
-          echo "❌ Emulator failed to boot"
-          exit 1
+
+          if [[ "$boot_completed" != "1" ]]; then
+            echo "❌ Emulator failed to boot"
+            exit 1
+          fi
+
+      - name: Get Debug Info
+        if: failure()
+        run: |
+          echo "=== Emulator process status ==="
+          ps -ef | grep emulator
+          echo "=== ADB devices ==="
+          adb devices -l
+          echo "=== ADB properties ==="
+          adb shell getprop
+          echo "=== Last 100 logcat lines ==="
+          adb logcat -d | tail -100
+          echo "=== Emulator log excerpts ==="
+          tail -50 emulator.log
 
       - name: Start Logcat Capture
         run: |
