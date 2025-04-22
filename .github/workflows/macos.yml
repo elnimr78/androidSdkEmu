@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest # ✅ changed from macos-latest
+    runs-on: ubuntu-latest  # ✅ changed from macos-latest
 
     steps:
       - name: Checkout Repository
@@ -30,8 +30,25 @@ jobs:
           emulator-options: "-no-audio -no-window -gpu swiftshader_indirect"
           disable-animations: true
           script: |
-            adb wait-for-device
-            adb shell getprop sys.boot_completed | grep -m 1 '1'
+            # Wait for the emulator to boot with retries (maximum of 60 retries, i.e., 5 minutes)
+            retries=60
+            until adb shell getprop sys.boot_completed | grep -m 1 '1'; do
+              if [ $retries -le 0 ]; then
+                echo "Timeout reached, emulator did not boot in time."
+                exit 1
+              fi
+              echo "Waiting for emulator to boot..."
+              sleep 5
+              retries=$((retries - 1))
+            done
+
+            echo "Emulator booted successfully!"
+
+            # Install the APK
             adb install path/to/your_game.apk
+
+            # Launch the game
             adb shell am start -n com.your.game/.MainActivity
+
+            # Capture the logcat
             adb logcat -d > logcat_output.txt
