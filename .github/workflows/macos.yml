@@ -6,7 +6,7 @@ on:
 jobs:
   emulator-job:
     runs-on: macos-latest
-    timeout-minutes: 30  # Reduced timeout since we'll fail faster
+    timeout-minutes: 30
 
     steps:
       - name: Cleanup previous runs
@@ -17,6 +17,7 @@ jobs:
       - name: Set environment variables
         run: |
           echo "ANDROID_SDK_ROOT=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_HOME=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
           echo "ANDROID_AVD_HOME=${{ runner.temp }}/android-avd" >> $GITHUB_ENV
           echo "JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home" >> $GITHUB_ENV
           mkdir -p "${{ runner.temp }}/android-avd"
@@ -41,38 +42,54 @@ jobs:
           echo "$ANDROID_SDK_ROOT/emulator" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
 
-      - name: Install SDK Packages
+      - name: Install SDK Packages with explicit paths
         run: |
           yes | sdkmanager --licenses
-          sdkmanager "platform-tools" "emulator" "system-images;android-33;google_apis_playstore;arm64-v8a"
+          sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "emulator" "system-images;android-33;google_apis_playstore;arm64-v8a"
+          
           # Verify installation
+          echo "System images installed at:"
           ls -la $ANDROID_SDK_ROOT/system-images/android-33/google_apis_playstore/arm64-v8a/
 
-      - name: Create AVD
+      - name: Create AVD with explicit SDK root
         run: |
-          echo "no" | avdmanager create avd -n testEmulator -k "system-images;android-33;google_apis_playstore;arm64-v8a" -d "pixel" -c 2048M
-          # Force config to avoid boot issues
+          avdmanager --sdk_root=$ANDROID_SDK_ROOT create avd -n testEmulator -k "system-images;android-33;google_apis_playstore;arm64-v8a" -d "pixel" -c 2048M <<< "no"
+          
+          # Configure AVD
           echo "hw.gpu.enabled=yes" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
           echo "hw.gpu.mode=swiftshader_indirect" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
           echo "showDeviceFrame=no" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
           echo "hw.ramSize=2048" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
           echo "vm.heapSize=256" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
           echo "disk.dataPartition.size=2G" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
-          # Verify AVD creation
-          avdmanager list avd
+          
+          # Add explicit SDK reference to AVD config
+          echo "image.sysdir.1=system-images/android-33/google_apis_playstore/arm64-v8a/" >> $ANDROID_AVD_HOME/testEmulator.avd/config.ini
+          
+          # Verify AVD
+          avdmanager --sdk_root=$ANDROID_SDK_ROOT list avd
 
-      - name: Start Emulator with visible process
+      - name: Start Emulator with explicit paths
         run: |
-          echo "Starting emulator..."
-          $ANDROID_SDK_ROOT/emulator/emulator -avd testEmulator -no-audio -no-window -gpu swiftshader_indirect -verbose -no-snapshot -no-boot-anim -accel on > emulator.log 2>&1 &
+          echo "Starting emulator with SDK root: $ANDROID_SDK_ROOT"
+          $ANDROID_SDK_ROOT/emulator/emulator \
+            -avd testEmulator \
+            -no-audio \
+            -no-window \
+            -gpu swiftshader_indirect \
+            -verbose \
+            -no-snapshot \
+            -no-boot-anim \
+            -accel on \
+            -sdk-root $ANDROID_SDK_ROOT > emulator.log 2>&1 &
           EMULATOR_PID=$!
           echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
           echo "Emulator started with PID $EMULATOR_PID"
-          sleep 5  # Initial delay before checking
+          sleep 5
 
       - name: Verify Emulator Process
         run: |
-          echo "Current running emulator processes:"
+          echo "Current processes:"
           ps -ef | grep emulator || true
           
           if ! ps -p $EMULATOR_PID > /dev/null; then
@@ -86,29 +103,28 @@ jobs:
         timeout-minutes: 10
         run: |
           echo "Waiting for emulator..."
-          adb start-server
+          $ANDROID_SDK_ROOT/platform-tools/adb start-server
           
-          # Wait for device to appear
+          # Wait for device
           for i in {1..30}; do
-            if adb devices | grep -q emulator; then
+            if $ANDROID_SDK_ROOT/platform-tools/adb devices | grep -q emulator; then
               echo "Device detected"
               break
             fi
-            echo "Waiting for device to appear... ($i/30)"
+            echo "Waiting for device... ($i/30)"
             sleep 5
           done
           
           # Wait for boot completion
           for i in {1..30}; do
-            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null || echo "")
-            bootanim=$(adb shell getprop init.svc.bootanim 2>/dev/null || echo "running")
+            boot_completed=$($ANDROID_SDK_ROOT/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null || echo "")
+            bootanim=$($ANDROID_SDK_ROOT/platform-tools/adb shell getprop init.svc.bootanim 2>/dev/null || echo "running")
             
             if [[ "$boot_completed" == "1" && "$bootanim" == "stopped" ]]; then
-              echo "✅ Emulator fully booted!"
-              adb shell input keyevent 82  # Wake up device
+              echo "✅ Emulator booted!"
+              $ANDROID_SDK_ROOT/platform-tools/adb shell input keyevent 82
               exit 0
             fi
-            
             echo "Booting... ($i/30) [boot_completed=$boot_completed, bootanim=$bootanim]"
             sleep 5
           done
@@ -116,18 +132,14 @@ jobs:
           echo "❌ Emulator failed to boot"
           echo "=== Last 50 lines of emulator.log ==="
           tail -50 emulator.log
-          echo "=== ADB devices ==="
-          adb devices -l
           exit 1
 
-      - name: Run Logcat
+      - name: Capture Logcat
         if: success()
         run: |
-          adb logcat > logcat_output.txt &
-          LOGCAT_PID=$!
-          echo "LOGCAT_PID=$LOGCAT_PID" >> $GITHUB_ENV
-          sleep 300  # Capture logs for 5 minutes
-          kill $LOGCAT_PID || true
+          $ANDROID_SDK_ROOT/platform-tools/adb logcat > logcat_output.txt &
+          sleep 300
+          pkill -f "adb logcat" || true
 
       - name: Upload Logs
         if: always()
