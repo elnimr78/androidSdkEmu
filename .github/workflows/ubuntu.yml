@@ -104,46 +104,62 @@ jobs:
           # Create AVD directory first
           mkdir -p "$ANDROID_SDK_ROOT/avd"
           
-          # Create the AVD with more verbose output
-          echo "Creating AVD..."
-          echo no | avdmanager create avd \
+          # Create the AVD with verbose logging
+          echo "Creating AVD with command:"
+          echo "echo no | avdmanager create avd --name $EMULATOR_NAME --package \"system-images;android-$API_LEVEL;google_apis;$ARCH\" --device \"$PROFILE\" --force"
+          
+          if ! echo no | avdmanager create avd \
             --name $EMULATOR_NAME \
             --package "system-images;android-$API_LEVEL;google_apis;$ARCH" \
             --device "$PROFILE" \
-            --force \
-            --verbose
+            --force; then
+            
+            echo "::warning::AVD creation command failed, attempting manual creation"
+            
+            # Manual AVD creation
+            AVD_DIR="$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.avd"
+            mkdir -p "$AVD_DIR"
+            
+            # Create config.ini
+            cat << EOF > "$AVD_DIR/config.ini"
+            avd.ini.encoding=UTF-8
+            hw.gpu.mode=auto
+            hw.ramSize=2048
+            hw.keyboard=yes
+            vm.heapSize=512
+            disk.dataPartition.size=4G
+            EOF
+            
+            # Create the .ini file in the main avd directory
+            cat << EOF > "$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.ini"
+            avd.ini.encoding=UTF-8
+            path=$AVD_DIR
+            path.rel=avd/$EMULATOR_NAME.avd
+            target=android-$API_LEVEL
+            EOF
+            
+            echo "Manually created AVD configuration"
+          fi
           
           # Verify AVD was created
           AVD_DIR="$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.avd"
           CONFIG_FILE="$AVD_DIR/config.ini"
           
           if [ ! -f "$CONFIG_FILE" ]; then
-            echo "::error::AVD configuration failed"
+            echo "::error::AVD configuration failed - config.ini not found"
             echo "Contents of avd directory:"
             ls -la "$ANDROID_SDK_ROOT/avd"
-            echo "Trying to create config.ini manually..."
-            
-            mkdir -p "$AVD_DIR"
-            echo "avd.ini.encoding=UTF-8" > "$AVD_DIR/config.ini"
-            echo "hw.gpu.mode=auto" >> "$AVD_DIR/config.ini"
-            echo "hw.ramSize=2048" >> "$AVD_DIR/config.ini"
-            echo "hw.keyboard=yes" >> "$AVD_DIR/config.ini"
-            echo "vm.heapSize=512" >> "$AVD_DIR/config.ini"
-            echo "disk.dataPartition.size=4G" >> "$AVD_DIR/config.ini"
-            
-            # Also create the .ini file in the main avd directory
-            echo "avd.ini.encoding=UTF-8" > "$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.ini"
-            echo "path=$AVD_DIR" >> "$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.ini"
-            echo "path.rel=avd/$EMULATOR_NAME.avd" >> "$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.ini"
-            echo "target=android-$API_LEVEL" >> "$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.ini"
+            exit 1
           fi
           
           echo "AVD configuration complete"
+          echo "Contents of AVD directory:"
           ls -la "$AVD_DIR"
 
       - name: Start emulator in background
         run: |
           # Start emulator with verbose logging
+          echo "Starting emulator..."
           nohup $ANDROID_SDK_ROOT/emulator/emulator \
             -avd $EMULATOR_NAME \
             -no-window \
@@ -156,6 +172,7 @@ jobs:
             -logcat *:V > emulator.log 2>&1 &
           EMULATOR_PID=$!
           echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
+          echo "Emulator started with PID $EMULATOR_PID"
 
       - name: Wait for emulator to boot
         timeout-minutes: 10
@@ -163,6 +180,7 @@ jobs:
           # Wait for device to appear in adb
           echo "Waiting for emulator to start..."
           adb wait-for-device
+          echo "Emulator device detected, waiting for boot completion..."
           
           # Wait for boot completion
           boot_completed=false
@@ -209,7 +227,9 @@ jobs:
         if: always()
         run: |
           if [ -n "$EMULATOR_PID" ]; then
+            echo "Stopping emulator with PID $EMULATOR_PID"
             kill $EMULATOR_PID || true
           fi
+          echo "Killing any remaining emulator processes"
           adb emu kill || true
           echo "Emulator stopped"
