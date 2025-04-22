@@ -39,23 +39,30 @@ jobs:
 
       - name: Create AVD
         run: |
-          avdmanager create avd \
-            --sdk-root "$ANDROID_SDK_ROOT" \
+          # Export environment variables
+          export ANDROID_SDK_ROOT="${{ runner.temp }}/android-sdk"
+          export ANDROID_AVD_HOME="${{ runner.temp }}/android-avd"
+          
+          # Create AVD
+          echo "no" | avdmanager create avd \
             -n testEmulator \
             -k "system-images;android-33;google_apis_playstore;arm64-v8a" \
             -d pixel \
-            -c 2048M <<< "no"
+            -c 2048M
 
           # Configure AVD
           cat <<EOF >> "$ANDROID_AVD_HOME/testEmulator.avd/config.ini"
+          image.sysdir.1=system-images/android-33/google_apis_playstore/arm64-v8a/
           hw.gpu.enabled=yes
           hw.gpu.mode=swiftshader_indirect
           showDeviceFrame=no
           hw.ramSize=2048
           vm.heapSize=256
           disk.dataPartition.size=2G
-          image.sysdir.1=system-images/android-33/google_apis_playstore/arm64-v8a/
           EOF
+
+          # Verify AVD creation
+          avdmanager list avd
 
       - name: Start Emulator
         run: |
