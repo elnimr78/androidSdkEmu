@@ -9,44 +9,30 @@ jobs:
     steps:
       - name: Set up Android SDK
         run: |
-          mkdir -p "$HOME/android-sdk"
+          mkdir -p $HOME/android-sdk
           curl -o sdk-tools.zip https://dl.google.com/android/repository/commandlinetools-mac-10406996_latest.zip
-          unzip sdk-tools.zip -d "$HOME/android-sdk/cmdline-tools"
-          mv "$HOME/android-sdk/cmdline-tools/cmdline-tools" "$HOME/android-sdk/cmdline-tools/latest"
-      
-      - name: Accept all SDK licenses manually
-        run: |
-          mkdir -p "$ANDROID_HOME/licenses"
+          unzip sdk-tools.zip -d $HOME/android-sdk/cmdline-tools
+          mv $HOME/android-sdk/cmdline-tools/cmdline-tools $HOME/android-sdk/cmdline-tools/latest
 
-          # These are official license hashes from Google
-          echo "8933bad161af4178b1185d1a37fbf41ea5269c55" > "$ANDROID_HOME/licenses/android-sdk-license"
-          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> "$ANDROID_HOME/licenses/android-sdk-license"
-          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
-
-      - name: Export Android SDK environment variables
+      - name: Set Environment Variables
         run: |
           echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "PATH=$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools:$HOME/android-sdk/emulator:$PATH" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
+          echo "$HOME/android-sdk/emulator" >> $GITHUB_PATH
 
-      - name: Install Android SDK components
+      - name: Accept Android SDK licenses
         run: |
-          sdkmanager --sdk_root=$HOME/android-sdk --licenses <<< "y"
+          mkdir -p $HOME/android-sdk/licenses
+          echo "8933bad161af4178b1185d1a37fbf41ea5269c55" > $HOME/android-sdk/licenses/android-sdk-license
+          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> $HOME/android-sdk/licenses/android-sdk-license
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $HOME/android-sdk/licenses/android-sdk-preview-license
+
+      - name: Install SDK components
+        run: |
           sdkmanager --sdk_root=$HOME/android-sdk \
             "platform-tools" \
             "emulator" \
             "platforms;android-34" \
             "system-images;android-34;default;arm64-v8a"
-
-      - name: Create AVD
-        run: echo "no" | avdmanager create avd -n Pixel_ARM -k "system-images;android-34;default;arm64-v8a" -d pixel
-
-      - name: Launch AVD
-        run: |
-          $HOME/android-sdk/emulator/emulator -avd Pixel_ARM -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &
-          adb wait-for-device
-          adb shell getprop ro.product.cpu.abi
-
-      - name: Install & Launch APK (example)
-        run: |
-          adb install path/to/your-unity-arm64.apk
-          adb shell monkey -p com.yourcompany.yourgame -c android.intent.category.LAUNCHER 1
