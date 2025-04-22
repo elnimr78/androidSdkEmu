@@ -6,32 +6,27 @@ on:
   pull_request:
     branches: [ main ]
 
-    
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
-      - name: checkout
+      - name: Checkout code
         uses: actions/checkout@v4
-     
-      - name: Install Gradle
-        run: |
-          if [ -L /usr/bin/gradle ]; then
-            sudo rm /usr/bin/gradle
-          fi
-          wget https://services.gradle.org/distributions/gradle-7.5-bin.zip
-          unzip gradle-7.5-bin.zip
-          sudo mv gradle-7.5 /opt/gradle
-          sudo ln -s /opt/gradle/bin/gradle /usr/bin/gradle
-      
+
+      # Make gradlew executable if necessary
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: run tests
+      - name: Run emulator and tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
-          script: ./gradlew connectedCheck
+          script: |
+            ./gradlew connectedCheck
