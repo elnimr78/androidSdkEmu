@@ -50,23 +50,34 @@ jobs:
       
       - name: Debug Emulator Process
         run: ps -ef | grep emulator
-  
-      - name: Wait for ADB to connect
-        run: |
-          adb wait-for-device
-          boot_completed=""
-          echo "Waiting for emulator to fully boot..."
-          until [[ "$boot_completed" == "1" ]]; do
-            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            sleep 5
-          done
-          echo "Emulator booted!"
-          
+      
       - name: Debug emulator status
         run: |
           adb devices
           adb shell getprop | grep boot
           adb shell pm list packages | head -n 10
+          
+      - name: Wait for emulator to fully boot
+        run: |
+          adb wait-for-device
+          boot_completed=""
+          seconds_waited=0
+          echo "Waiting for emulator to fully boot..."
+          until [[ "$boot_completed" == "1" || $seconds_waited -ge 600 ]]; do
+            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            echo "Boot status: $boot_completed (after $seconds_waited seconds)"
+            sleep 5
+            seconds_waited=$((seconds_waited + 5))
+          done
+      
+          if [[ "$boot_completed" == "1" ]]; then
+            echo "✅ Emulator booted!"
+          else
+            echo "❌ Emulator failed to boot in 10 minutes."
+            exit 1
+          fi
+          
+      
           
       - name: Start capturing logcat
         run: |
