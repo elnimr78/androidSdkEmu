@@ -1,38 +1,69 @@
-name: Android ARM64 Emulator on macOS
+name: Android Emulator with Logcat
 
 on:
   workflow_dispatch:
 
 jobs:
-  android-emulator:
+  emulator-job:
     runs-on: macos-latest
+    timeout-minutes: 45
+
+    env:
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+      JAVA_HOME: /Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home
+
     steps:
-      - name: Set up Android SDK
-        run: |
-          mkdir -p $HOME/android-sdk
-          curl -o sdk-tools.zip https://dl.google.com/android/repository/commandlinetools-mac-10406996_latest.zip
-          unzip sdk-tools.zip -d $HOME/android-sdk/cmdline-tools
-          mv $HOME/android-sdk/cmdline-tools/cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-      - name: Set Environment Variables
+      - name: Download Android command line tools
         run: |
-          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
-          echo "$HOME/android-sdk/emulator" >> $GITHUB_PATH
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          curl -fo commandlinetools.zip https://dl.google.com/android/repository/commandlinetools-mac-10406996_latest.zip
+          unzip -q commandlinetools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
+          mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
+          rm commandlinetools.zip
 
-      - name: Accept Android SDK licenses
+      - name: Add Android tools to PATH
         run: |
-          mkdir -p $HOME/android-sdk/licenses
-          echo "8933bad161af4178b1185d1a37fbf41ea5269c55" > $HOME/android-sdk/licenses/android-sdk-license
-          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> $HOME/android-sdk/licenses/android-sdk-license
-          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $HOME/android-sdk/licenses/android-sdk-preview-license
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/emulator" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
 
-      - name: Install SDK components
+      - name: Install SDK packages
         run: |
-          sdkmanager --sdk_root=$HOME/android-sdk \
-            "platform-tools" \
-            "emulator" \
-            "platforms;android-34" \
-            "system-images;android-34;default;arm64-v8a"
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "emulator" "system-images;android-34;google_apis_playstore;arm64-v8a"
+
+      - name: Create Android Virtual Device (AVD)
+        run: |
+          echo "no" | avdmanager create avd -n testEmulator -k "system-images;android-34;google_apis_playstore;arm64-v8a" -d "pixel"
+
+      - name: Start Android Emulator
+        run: |
+          nohup $ANDROID_SDK_ROOT/emulator/emulator -avd testEmulator -no-audio -no-window -no-snapshot -gpu swiftshader_indirect > emulator.log 2>&1 &
+
+      - name: Wait for ADB to connect
+        run: |
+          adb wait-for-device
+          boot_completed=""
+          echo "Waiting for emulator to fully boot..."
+          until [[ "$boot_completed" == "1" ]]; do
+            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            sleep 5
+          done
+          echo "Emulator booted!"
+
+      - name: Start capturing logcat
+        run: |
+          nohup adb logcat > logcat_output.txt 2>&1 &
+          sleep 1800 # 30 minutes
+
+      - name: Upload logcat output
+        uses: actions/upload-artifact@v4
+        with:
+          name: logcat-output
+          path: logcat_output.txt
