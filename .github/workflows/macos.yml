@@ -32,87 +32,105 @@ jobs:
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
 
-      - name: Install packages
+      - name: Install packages (with verification)
         run: |
           yes | sdkmanager --licenses
           sdkmanager "platform-tools" "emulator" "system-images;android-33;google_apis_playstore;arm64-v8a"
+          
+          # Debug: Verify installation
+          echo "=== Installed Packages ==="
+          sdkmanager --list
+          echo "=== System Images ==="
+          ls -la "$ANDROID_SDK_ROOT/system-images/android-33/google_apis_playstore/arm64-v8a/"
 
-      - name: Create AVD
+      - name: Create AVD (with debug output)
         run: |
+          echo "=== Creating AVD ==="
           echo "no" | avdmanager create avd \
             -n testEmulator \
             -k "system-images;android-33;google_apis_playstore;arm64-v8a" \
             -d pixel \
             -c 2048M
 
-          # Critical AVD configuration
+          # Critical configuration
           cat <<EOF >> "$ANDROID_AVD_HOME/testEmulator.avd/config.ini"
           hw.gpu.enabled=yes
           hw.gpu.mode=swiftshader_indirect
           hw.ramSize=2048
-          vm.heapSize=256
+          vm.heapSize=512  # Must match log output
           disk.dataPartition.size=2G
           image.sysdir.1=system-images/android-33/google_apis_playstore/arm64-v8a/
           EOF
 
-      - name: Start Emulator (with ADB fixes)
-        run: |
-          # Start ADB server first
-          adb start-server
-          adb kill-server
-          adb start-server
+          # Debug: Verify AVD
+          echo "=== AVD Config ==="
+          cat "$ANDROID_AVD_HOME/testEmulator.avd/config.ini"
 
-          # Start emulator with explicit port
+      - name: Start Emulator (with HVF fix)
+        run: |
+          echo "=== Starting Emulator ==="
+          # Disable HVF acceleration explicitly
           $ANDROID_SDK_ROOT/emulator/emulator \
             -avd testEmulator \
             -no-audio \
             -no-window \
             -gpu swiftshader_indirect \
-            -ports 5554,5555 \
             -no-snapshot \
+            -no-accel \  # Critical fix for HVF error
             -verbose > emulator.log 2>&1 &
           EMULATOR_PID=$!
           echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
 
-          # Verify emulator process
+          # Debug: Verify process
           sleep 5
-          echo "=== Emulator Process ==="
-          ps -p $EMULATOR_PID || { echo "Emulator failed to start"; cat emulator.log; exit 1; }
+          echo "=== Running Processes ==="
+          ps -ef | grep emulator || true
+          echo "=== Emulator Log Head ==="
+          head -20 emulator.log
 
-      - name: Wait for device (with ADB fixes)
+      - name: Wait for boot (with robust checks)
         timeout-minutes: 10
         run: |
-          # Reset ADB connection
-          adb kill-server
+          echo "=== Waiting for Boot ==="
           adb start-server
-
-          echo "=== Waiting for device ==="
+          
+          # Phase 1: Wait for device connection
           for i in {1..60}; do
-            # Check device connection
             DEVICES=$(adb devices)
             echo "$DEVICES"
             
             if echo "$DEVICES" | grep -q emulator; then
-              echo "✅ Device connected"
-              
-              # Check if device is ready for commands
-              if adb shell getprop sys.boot_completed >/dev/null 2>&1; then
-                echo "✅ Device ready"
-                adb shell input keyevent 82
-                exit 0
-              fi
+              echo "✅ Device detected"
+              break
+            fi
+            echo "Waiting for device ($i/60)..."
+            sleep 5
+          done
+          
+          # Phase 2: Wait for full boot
+          for i in {1..60}; do
+            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null || echo "")
+            bootanim=$(adb shell getprop init.svc.bootanim 2>/dev/null || echo "running")
+            
+            if [[ "$boot_completed" == "1" && "$bootanim" == "stopped" ]]; then
+              echo "✅ Fully booted!"
+              adb shell input keyevent 82  # Wake up
+              exit 0
             fi
             
+            # Debug: Additional checks
+            echo "Status ($i/60): boot_completed=$boot_completed, bootanim=$bootanim"
+            echo "=== ADB Devices ==="
+            adb devices -l
             sleep 5
-            echo "Retry $i/60..."
           done
-
-          echo "❌ Failed to connect"
-          echo "=== ADB Debug ==="
-          adb devices -l
+          
+          # Debug: Failure investigation
+          echo "❌ Boot failed!"
+          echo "=== Last 50 Log Lines ==="
+          tail -50 emulator.log
+          echo "=== ADB Properties ==="
           adb shell getprop || true
-          echo "=== Emulator Log ==="
-          tail -100 emulator.log
           exit 1
 
       - name: Capture Logs
@@ -122,11 +140,11 @@ jobs:
           echo "--- Processes ---"
           ps -ef | grep -E 'emulator|adb'
           echo "--- Network ---"
-          netstat -an | grep 555
+          netstat -an | grep 555 || true
           echo "--- ADB Devices ---"
-          adb devices -l
+          adb devices -l || true
           echo "--- Logcat ---"
-          # adb logcat -d > logcat.txt || true
+          adb logcat -d > logcat.txt || true
           tail -200 emulator.log > emulator-tail.log
 
       - name: Upload Logs
