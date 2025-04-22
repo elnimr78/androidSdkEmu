@@ -16,6 +16,9 @@ jobs:
      
       - name: Install Gradle
         run: |
+          if [ -L /usr/bin/gradle ]; then
+            sudo rm /usr/bin/gradle
+          fi
           wget https://services.gradle.org/distributions/gradle-7.5-bin.zip
           unzip gradle-7.5-bin.zip
           sudo mv gradle-7.5 /opt/gradle
