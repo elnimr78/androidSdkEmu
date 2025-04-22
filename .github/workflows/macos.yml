@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest # ✅ changed from macos-latest
 
     steps:
       - name: Checkout Repository
@@ -20,15 +20,12 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Install Android SDK
-        uses: malinskiy/action-android/install-sdk@release/0.1.6
-
       - name: Start Android Emulator
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
           api-level: 30
           target: google_apis
-          arch: x86_64                 # ✅ changed from arm64-v8a
+          arch: x86_64
           profile: Nexus 6
           emulator-options: "-no-audio -no-window -gpu swiftshader_indirect"
           disable-animations: true
