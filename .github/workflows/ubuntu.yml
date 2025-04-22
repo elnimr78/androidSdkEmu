@@ -1,235 +1,51 @@
-name: Android Emulator CI (Ubuntu 24.04)
+name: Android Emulator Logcat Capture
 
 on:
   workflow_dispatch:
-  pull_request:
-  push:
-    branches: [ main ]
 
 jobs:
-  android-emulator:
+  emulator-logcat:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-      ANDROID_HOME: ${{ github.workspace }}/android-sdk
-      EMULATOR_NAME: test-emulator
-      API_LEVEL: 34
-      ARCH: x86_64
-      PROFILE: pixel_7_pro
-
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up environment variables
-        run: |
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "EMULATOR_NAME=$EMULATOR_NAME" >> $GITHUB_ENV
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: 17
 
-      - name: Install system dependencies
+      - name: Enable KVM for hardware acceleration
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            libpulse0 \
-            libglx-mesa0 \
-            libegl-mesa0 \
-            libgl1 \
-            openjdk-17-jdk \
-            qemu-kvm \
-            libnss3 \
-            libxcomposite1 \
-            libxcursor1 \
-            libxi6 \
-            libxtst6 \
-            ca-certificates \
-            curl \
-            unzip \
-            git \
-            expect
+          sudo apt-get update
+          sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils
+          sudo adduser $USER libvirt
+          sudo adduser $USER kvm
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
-      - name: Check KVM availability
-        run: |
-          if [ ! -c /dev/kvm ]; then
-            echo "::warning::KVM not available, emulator will run slower"
-          else
-            sudo chmod a+rw /dev/kvm
-          fi
+      - name: Run emulator and capture Logcat
+        uses: malinskiy/action-android/emulator-run-cmd@release/0.1.6
+        with:
+          api: 30
+          tag: google_apis
+          abi: x86
+          disable-animations: true
+          boot-timeout: 600
+          verbose: true
+          cmd: |
+            echo "Starting Logcat capture..."
+            adb logcat -c
+            adb logcat -v time > artifacts/logcat.log &
+            echo "Logcat is running in the background."
+            sleep 30
+            echo "Stopping Logcat capture."
+            pkill -f "adb logcat"
 
-      - name: Download Android Command Line Tools
-        run: |
-          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/latest
-          curl -s https://dl.google.com/android/repository/commandlinetools-linux-10406996_latest.zip -o cmdline-tools.zip
-          unzip -qq cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools/latest
-          mv $ANDROID_SDK_ROOT/cmdline-tools/latest/cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/latest/
-          rm -r $ANDROID_SDK_ROOT/cmdline-tools/latest/cmdline-tools cmdline-tools.zip
-
-      - name: Add Android tools to PATH
-        run: |
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/emulator" >> $GITHUB_PATH
-
-      - name: Accept licenses automatically
-        run: |
-          mkdir -p "$ANDROID_SDK_ROOT/licenses"
-          echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_SDK_ROOT/licenses/android-sdk-license"
-          echo -e "84831b9409646a918e30573bab4c9c91346d8abd" >> "$ANDROID_SDK_ROOT/licenses/android-sdk-license"
-          echo -e "d56f5187479451eabf01fb78af6dfcb131a6481e" >> "$ANDROID_SDK_ROOT/licenses/android-sdk-license"
-          echo -e "33b6a2b64607f11b759f320ef9dff4ae5c47d97a" >> "$ANDROID_SDK_ROOT/licenses/android-sdk-license"
-          echo -e "601085b94cd77f0b54ff86406957099ebe79c18d" >> "$ANDROID_SDK_ROOT/licenses/android-sdk-license"
-
-      - name: Install required Android SDK components
-        run: |
-          # Use expect to automatically accept all licenses
-          cat << 'EOF' > accept-licenses.exp
-          #!/usr/bin/expect -f
-          set timeout -1
-          spawn sdkmanager --sdk_root=$env(ANDROID_SDK_ROOT) "platform-tools" "emulator" "platforms;android-$env(API_LEVEL)" "system-images;android-$env(API_LEVEL);google_apis;$env(ARCH)"
-          expect {
-              "Accept? (y/N)" { exp_send "y\r"; exp_continue }
-              eof
-          }
-          EOF
-          
-          chmod +x accept-licenses.exp
-          ./accept-licenses.exp
-          
-          # Verify installations
-          sdkmanager --list_installed --sdk_root=$ANDROID_SDK_ROOT
-
-      - name: Create Android Virtual Device
-        run: |
-          # Create AVD directory first
-          mkdir -p "$ANDROID_SDK_ROOT/avd"
-          
-          # Create the AVD with verbose logging
-          echo "Creating AVD with command:"
-          echo "echo no | avdmanager create avd --name $EMULATOR_NAME --package \"system-images;android-$API_LEVEL;google_apis;$ARCH\" --device \"$PROFILE\" --force"
-          
-          if ! echo no | avdmanager create avd \
-            --name $EMULATOR_NAME \
-            --package "system-images;android-$API_LEVEL;google_apis;$ARCH" \
-            --device "$PROFILE" \
-            --force; then
-            
-            echo "::warning::AVD creation command failed, attempting manual creation"
-            
-            # Manual AVD creation
-            AVD_DIR="$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.avd"
-            mkdir -p "$AVD_DIR"
-            
-            # Create config.ini
-            cat << EOF > "$AVD_DIR/config.ini"
-            avd.ini.encoding=UTF-8
-            hw.gpu.mode=auto
-            hw.ramSize=2048
-            hw.keyboard=yes
-            vm.heapSize=512
-            disk.dataPartition.size=4G
-            EOF
-            
-            # Create the .ini file in the main avd directory
-            cat << EOF > "$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.ini"
-            avd.ini.encoding=UTF-8
-            path=$AVD_DIR
-            path.rel=avd/$EMULATOR_NAME.avd
-            target=android-$API_LEVEL
-            EOF
-            
-            echo "Manually created AVD configuration"
-          fi
-          
-          # Verify AVD was created
-          AVD_DIR="$ANDROID_SDK_ROOT/avd/$EMULATOR_NAME.avd"
-          CONFIG_FILE="$AVD_DIR/config.ini"
-          
-          if [ ! -f "$CONFIG_FILE" ]; then
-            echo "::error::AVD configuration failed - config.ini not found"
-            echo "Contents of avd directory:"
-            ls -la "$ANDROID_SDK_ROOT/avd"
-            exit 1
-          fi
-          
-          echo "AVD configuration complete"
-          echo "Contents of AVD directory:"
-          ls -la "$AVD_DIR"
-
-      - name: Start emulator in background
-        run: |
-          # Start emulator with verbose logging
-          echo "Starting emulator..."
-          nohup $ANDROID_SDK_ROOT/emulator/emulator \
-            -avd $EMULATOR_NAME \
-            -no-window \
-            -no-boot-anim \
-            -no-audio \
-            -gpu auto \
-            -memory 2048 \
-            -cores 2 \
-            -accel on \
-            -logcat *:V > emulator.log 2>&1 &
-          EMULATOR_PID=$!
-          echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
-          echo "Emulator started with PID $EMULATOR_PID"
-
-      - name: Wait for emulator to boot
-        timeout-minutes: 10
-        run: |
-          # Wait for device to appear in adb
-          echo "Waiting for emulator to start..."
-          adb wait-for-device
-          echo "Emulator device detected, waiting for boot completion..."
-          
-          # Wait for boot completion
-          boot_completed=false
-          for i in {1..60}; do
-            if adb shell getprop sys.boot_completed | grep -q "1"; then
-              boot_completed=true
-              break
-            fi
-            sleep 5
-            echo "Waiting for emulator to boot... ($i/60)"
-          done
-          
-          if [ "$boot_completed" = false ]; then
-            echo "::error::Emulator failed to boot"
-            echo "Emulator log tail:"
-            tail -n 50 emulator.log
-            echo "Last logcat:"
-            adb logcat -d | tail -n 50
-            exit 1
-          fi
-          
-          # Unlock the device
-          adb shell input keyevent 82
-          echo "Emulator booted successfully"
-
-      - name: Run tests
-        run: |
-          # Your test commands here
-          echo "Running tests..."
-          adb devices
-          adb shell getprop
-          adb logcat -d > logcat.txt
-
-      - name: Upload emulator logs
-        if: always()
+      - name: Upload Logcat output
         uses: actions/upload-artifact@v4
         with:
-          name: emulator-logs
-          path: |
-            emulator.log
-            logcat.txt
-
-      - name: Stop emulator
-        if: always()
-        run: |
-          if [ -n "$EMULATOR_PID" ]; then
-            echo "Stopping emulator with PID $EMULATOR_PID"
-            kill $EMULATOR_PID || true
-          fi
-          echo "Killing any remaining emulator processes"
-          adb emu kill || true
-          echo "Emulator stopped"
+          name: logcat
+          path: artifacts/logcat.log
