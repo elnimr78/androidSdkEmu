@@ -1,0 +1,32 @@
+name: pguyot- ARM
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test-adb:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Run ARM emulator and test ADB
+      uses: pguyot/arm-runner-action@v2
+      with:
+        base_image: debian:bullseye
+        cpu: cortex-a53
+        commands: |
+          echo "Updating and installing ADB..."
+          apt-get update
+          apt-get install -y android-tools-adb
+
+          echo "Starting ADB server..."
+          adb start-server
+          sleep 2
+
+          echo "Listing ADB devices..."
+          adb devices
