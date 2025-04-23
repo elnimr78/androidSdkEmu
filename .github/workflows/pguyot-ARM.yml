@@ -1,4 +1,4 @@
-name: pguyot- ARM
+name: Test ADB in ARM
 
 on:
   push:
@@ -17,10 +17,10 @@ jobs:
     - name: Run ARM emulator and test ADB
       uses: pguyot/arm-runner-action@v2
       with:
-        base_image: debian:bullseye
-        cpu: cortex-a53
+        image: bullseye   # Corrected from "base_image: debian:bullseye"
+        cpu: cortex-a53   # Optional, defaults to something reasonable
         commands: |
-          echo "Updating and installing ADB..."
+          echo "Installing ADB..."
           apt-get update
           apt-get install -y android-tools-adb
 
